@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install:*)",
+      "Bash(dir:*)",
+      "Bash(cmd /c:*)",
+      "Bash(pnpm add:*)",
+      "Bash(where:*)"
+    ]
+  }
+}
