@@ -252,15 +252,26 @@ namespace Alazan.API.Controllers
                 if (boleta == null)
                     return NotFound(new { message = "Boleta no encontrada" });
 
-                var bodegaId = dto.SiloCalibreId ?? dto.SiloId ?? dto.SiloPulmonId;
+                var bodegaId = dto.SiloCalibreId ?? dto.SiloId ?? dto.SiloPulmonId ?? dto.BodegaId;
                 if (bodegaId == null)
-                    return BadRequest(new { message = "Debe seleccionar al menos un silo" });
+                    return BadRequest(new { message = "Debe seleccionar al menos un silo o almacén" });
 
-                // Obtener el nombre del silo seleccionado para guardarlo en bodega_ubicacion
+                // Obtener el nombre del silo/almacén seleccionado para guardarlo en bodega_ubicacion
                 string siloNombre = "Sin nombre";
                 string siloNumero = "";
 
-                if (dto.SiloCalibreId.HasValue)
+                if (dto.BodegaId.HasValue)
+                {
+                    var almacen = await _db.QueryFirstOrDefaultAsync<dynamic>(@"
+                        SELECT nombre_almacen AS nombre, CAST(id AS VARCHAR) AS numero FROM dbo.catalogo_almacenes WHERE id = @Id",
+                        new { Id = dto.BodegaId.Value });
+                    if (almacen != null)
+                    {
+                        siloNombre = (string)almacen.nombre;
+                        siloNumero = (string)almacen.numero;
+                    }
+                }
+                else if (dto.SiloCalibreId.HasValue)
                 {
                     var siloCalibre = await _db.QueryFirstOrDefaultAsync<dynamic>(@"
                         SELECT nombre, CAST(id AS VARCHAR) AS numero FROM dbo.silos_calibre_catalogo WHERE id = @Id",
@@ -456,6 +467,7 @@ namespace Alazan.API.Controllers
         public int? SiloId { get; set; }
         public int? SiloCalibreId { get; set; }
         public int? SiloPulmonId { get; set; }
+        public int? BodegaId { get; set; }
     }
 
     // DTO para recibir la petición
