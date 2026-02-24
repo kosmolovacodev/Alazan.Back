@@ -17,14 +17,15 @@ namespace Alazan.API.Controllers
             _db = db;
         }
 
-        // Obtener todas las pantallas del catálogo
+        // Obtener todas las pantallas del catálogo (filtradas por sede)
         [HttpGet]
-        public async Task<IActionResult> Get()
+        public async Task<IActionResult> Get([FromQuery] int sede_id = 0)
         {
             try
             {
-                var sql = "SELECT id, nombre_pantalla, descripcion FROM dbo.pantallas";
-                var pantallas = await _db.QueryAsync(sql);
+                var sql = @"SELECT id, nombre_pantalla, descripcion FROM dbo.pantallas
+                            WHERE @sede_id = 0 OR sede_id = @sede_id OR sede_id IS NULL";
+                var pantallas = await _db.QueryAsync(sql, new { sede_id });
                 return Ok(pantallas);
             }
             catch (Exception ex)
@@ -40,13 +41,18 @@ namespace Alazan.API.Controllers
             try
             {
                 var el = (System.Text.Json.JsonElement)p;
-                var sql = "INSERT INTO dbo.pantallas (nombre_pantalla, descripcion) VALUES (@nombre, @desc)";
-                
-                await _db.ExecuteAsync(sql, new { 
+                int? sedeId = el.TryGetProperty("sede_id", out var sedeProp) && sedeProp.ValueKind == System.Text.Json.JsonValueKind.Number
+                    ? sedeProp.GetInt32()
+                    : (int?)null;
+
+                var sql = "INSERT INTO dbo.pantallas (nombre_pantalla, descripcion, sede_id) VALUES (@nombre, @desc, @sedeId)";
+
+                await _db.ExecuteAsync(sql, new {
                     nombre = el.GetProperty("nombre_pantalla").GetString(),
-                    desc = el.GetProperty("descripcion").GetString() 
+                    desc = el.GetProperty("descripcion").GetString(),
+                    sedeId
                 });
-                
+
                 return Ok(new { message = "Pantalla registrada exitosamente" });
             }
             catch (Exception ex)
