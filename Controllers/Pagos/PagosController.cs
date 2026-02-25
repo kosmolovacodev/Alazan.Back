@@ -282,27 +282,51 @@ namespace Alazan.API.Controllers
         [HttpPut("actualizar-datos-bancarios")]
         public async Task<IActionResult> ActualizarDatosBancarios([FromBody] ActualizarDatosBancariosRequest dto)
         {
+            if (_db.State == ConnectionState.Closed) _db.Open();
+            using var trans = _db.BeginTransaction();
             try
             {
-                var sql = @"
+                // 1. Actualizar solicitud de pago
+                var sqlSolicitud = @"
                     UPDATE solicitudes_pago
-                    SET banco_id      = @BancoId,
-                        forma_pago_id = @FormaPagoId,
-                        clabe         = @Clabe,
-                        cuenta        = @Cuenta,
-                        updated_at    = GETDATE()
+                    SET banco_id     = @BancoId,
+                        metodo_pago  = @FormaPagoId,
+                        cuenta_clabe = @Clabe,
+                        updated_at   = GETDATE()
                     WHERE id     = @SolicitudId
                       AND status = 'SOLICITAR';";
 
-                var affected = await _db.ExecuteAsync(sql, dto);
+                var affected = await _db.ExecuteAsync(sqlSolicitud, dto, transaction: trans);
                 if (affected == 0)
+                {
+                    trans.Rollback();
                     return BadRequest(new { message = "No se actualizó. Verifique que el pago esté en estado SOLICITAR." });
+                }
 
+                // 2. Sincronizar banco y CLABE en el perfil del productor
+                // (productor_id puede ser NULL en solicitudes_pago, se llega vía facturacion_recepciones)
+                var sqlProductor = @"
+                    UPDATE p
+                    SET p.banco_id     = @BancoId,
+                        p.cuenta_clabe = @Clabe
+                    FROM productores p
+                    INNER JOIN facturacion_recepciones fr ON fr.productor_id = p.id
+                    INNER JOIN solicitudes_pago sp        ON sp.facturacion_id = fr.id
+                    WHERE sp.id = @SolicitudId;";
+
+                await _db.ExecuteAsync(sqlProductor, dto, transaction: trans);
+
+                trans.Commit();
                 return Ok(new { success = true });
             }
             catch (Exception ex)
             {
+                trans.Rollback();
                 return StatusCode(500, new { message = ex.Message });
+            }
+            finally
+            {
+                _db.Close();
             }
         }
 
@@ -433,8 +457,7 @@ namespace Alazan.API.Controllers
                         fecha_pago       = @FechaPago,
                         folio_pago       = @FolioPago,
                         banco_id         = ISNULL(@BancoId,     banco_id),
-                        forma_pago_id    = ISNULL(@FormaPagoId, forma_pago_id),
-                        cuenta           = ISNULL(@Cuenta,      cuenta),
+                        metodo_pago      = ISNULL(@FormaPagoId, metodo_pago),
                         monto_solicitado = CASE WHEN @ImportePago > 0
                                                THEN @ImportePago
                                                ELSE monto_solicitado END,
@@ -496,14 +519,14 @@ namespace Alazan.API.Controllers
                         sp.folio_pago                              AS [Folio Pago],
                         bc.nombre_banco                            AS Banco,
                         cpf.nombre                                 AS [Forma Pago],
-                        sp.clabe                                   AS CLABE
+                        sp.cuenta_clabe                            AS CLABE
                     FROM solicitudes_pago sp
                     INNER JOIN facturacion_recepciones fr      ON sp.facturacion_id = fr.id
                     INNER JOIN boletas b                       ON fr.boleta_id       = b.id
                     INNER JOIN productores p                   ON fr.productor_id    = p.id
                     LEFT  JOIN sedes_catalogo sc               ON fr.sede_id         = sc.id
                     LEFT  JOIN bancos_catalogo bc              ON sp.banco_id        = bc.id
-                    LEFT  JOIN Configuracion_Pagos_Formas cpf  ON sp.forma_pago_id   = cpf.id
+                    LEFT  JOIN Configuracion_Pagos_Formas cpf  ON sp.metodo_pago     = cpf.id
                     WHERE (@sedeId = 0 OR fr.sede_id = @sedeId)
                     {whereExtra}
                     ORDER BY sp.created_at DESC;";
