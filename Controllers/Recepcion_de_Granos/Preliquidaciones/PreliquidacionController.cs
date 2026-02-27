@@ -59,7 +59,7 @@ namespace Alazan.API.Controllers
                     LEFT JOIN dbo.analisis_calidad ac ON b.analisis_id = ac.id
                     LEFT JOIN dbo.preliquidaciones p ON p.boleta_id = b.id
                     WHERE (@sedeId = 0 OR b.sede_id = @sedeId)
-                      AND v.status IN ('Con Silo Asignado')
+                      AND v.status IN ('Con Silo Asignado', 'Con Almacen Asignado')
                     ORDER BY b.created_at DESC";
 
                 var registros = await _db.QueryAsync<dynamic>(sql, new { sedeId });
@@ -82,11 +82,12 @@ namespace Alazan.API.Controllers
                         COUNT(*) AS totalDelDia,
                         SUM(CASE WHEN p.id IS NOT NULL THEN 1 ELSE 0 END) AS conPreliquidacion,
                         SUM(CASE WHEN p.id IS NULL THEN 1 ELSE 0 END) AS sinPreliquidacion,
-                        CAST(SUM(ISNULL(ISNULL(p.peso_neto_kg,0), 0)) / 1000.0 AS DECIMAL(10,2)) AS totalToneladas
-                    FROM dbo.volcado_bodega v
-                    LEFT JOIN dbo.preliquidaciones p ON p.boleta_id = v.bascula_id
-                    WHERE (@sedeId = 0 OR v.sede_id = @sedeId)
-                    AND v.status IN ('Con Silo Asignado')";
+                        CAST(SUM(ISNULL(p.peso_neto_kg, 0)) / 1000.0 AS DECIMAL(10,2)) AS totalToneladas
+                    FROM dbo.boletas b
+                    INNER JOIN dbo.volcado_bodega v ON b.bascula_id = v.bascula_id
+                    LEFT JOIN dbo.preliquidaciones p ON p.boleta_id = b.id
+                    WHERE (@sedeId = 0 OR b.sede_id = @sedeId)
+                    AND v.status IN ('Con Silo Asignado', 'Con Almacen Asignado')";
 
                 var resumen = await _db.QueryFirstOrDefaultAsync<dynamic>(sql, new { sedeId });
                 return Ok(resumen);

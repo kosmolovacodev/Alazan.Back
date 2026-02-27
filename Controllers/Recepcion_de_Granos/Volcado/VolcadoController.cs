@@ -34,7 +34,7 @@ namespace Alazan.API.Controllers
                         v.kg_volcados AS kgVolcados,
                         CASE
                             WHEN v.id IS NOT NULL AND v.status = 'Rechazado' THEN 'Rechazado'
-                            WHEN v.id IS NOT NULL AND v.bodega_ubicacion IS NOT NULL THEN 'Con Silo Asignado'
+                            WHEN v.id IS NOT NULL AND v.bodega_ubicacion IS NOT NULL THEN v.status
                             ELSE 'Sin Silo Asignado'
                         END AS estatusSilo,
                         br.grano_id AS granoId,
@@ -237,16 +237,18 @@ namespace Alazan.API.Controllers
                 // 1. Obtener toda la información necesaria de la boleta
                 // Incluimos ticket_numero, calibre, humedad y observaciones que faltaban
                 var boleta = await _db.QueryFirstOrDefaultAsync<dynamic>(@"
-                    SELECT 
-                        bascula_id, 
-                        peso_neto, 
-                        ticket_numero, 
-                        calibre, 
-                        humedad, 
-                        observaciones,
-                        status 
-                    FROM dbo.boletas 
-                    WHERE id = @BoletaId",
+                    SELECT
+                        b.bascula_id,
+                        b.peso_neto,
+                        b.ticket_numero,
+                        b.calibre,
+                        b.humedad,
+                        b.observaciones,
+                        b.status,
+                        br.grano_id
+                    FROM dbo.boletas b
+                    INNER JOIN dbo.bascula_recepciones br ON b.bascula_id = br.id
+                    WHERE b.id = @BoletaId",
                     new { dto.BoletaId });
 
                 if (boleta == null)
@@ -297,6 +299,9 @@ namespace Alazan.API.Controllers
                 var usuario = Request.Headers["X-User-Email"].ToString();
                 var usuarioId = await _db.QueryFirstOrDefaultAsync<int?>(@"SELECT id FROM dbo.usuarios WHERE email = @email", new { email = usuario }) ?? 1;
 
+                // grano_id = 1 (frijol) → almacén; cualquier otro → silo
+                var statusVolcado = (int?)boleta.grano_id == 1 ? "Con Almacen Asignado" : "Con Silo Asignado";
+
                 var volcadoExistente = await _db.QueryFirstOrDefaultAsync<int?>(@"
                     SELECT id FROM dbo.volcado_bodega WHERE bascula_id = @BasculaId",
                     new { BasculaId = (int)boleta.bascula_id });
@@ -313,7 +318,7 @@ namespace Alazan.API.Controllers
                             calibre = @Calibre,
                             humedad_verificacion = @Humedad,
                             observaciones = @Obs,
-                            status = 'Con Silo Asignado',
+                            status = @StatusVolcado,
                             fecha_hora_volcado = SYSDATETIMEOFFSET(),
                             operador_usuario_id = @UsuarioId,
                             updated_at = SYSDATETIMEOFFSET()
@@ -327,6 +332,7 @@ namespace Alazan.API.Controllers
                             Calibre = boleta.calibre,
                             Humedad = boleta.humedad,
                             Obs = boleta.observaciones,
+                            StatusVolcado = statusVolcado,
                             UsuarioId = usuarioId,
                             BasculaId = (int)boleta.bascula_id
                         });
@@ -339,7 +345,7 @@ namespace Alazan.API.Controllers
                         created_at, updated_at, sede_id, ticket_numero, calibre, humedad_verificacion, observaciones, status)
                         VALUES
                         (@BasculaId, @BodegaId, @BodegaUbicacion, @SiloNumero, SYSDATETIMEOFFSET(), @KgVolcados, @UsuarioId,
-                        SYSDATETIMEOFFSET(), SYSDATETIMEOFFSET(), @SedeId, @Ticket, @Calibre, @Humedad, @Obs, 'Con Silo Asignado')",
+                        SYSDATETIMEOFFSET(), SYSDATETIMEOFFSET(), @SedeId, @Ticket, @Calibre, @Humedad, @Obs, @StatusVolcado)",
                         new {
                             BasculaId = (int)boleta.bascula_id,
                             BodegaId = bodegaId,
@@ -351,7 +357,8 @@ namespace Alazan.API.Controllers
                             Ticket = boleta.ticket_numero,
                             Calibre = boleta.calibre,
                             Humedad = boleta.humedad,
-                            Obs = boleta.observaciones
+                            Obs = boleta.observaciones,
+                            StatusVolcado = statusVolcado
                         });
                 }
 
