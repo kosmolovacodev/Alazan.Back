@@ -9,6 +9,7 @@ var builder = WebApplication.CreateBuilder(args);
 
 // 1. SOPORTE PARA CONTROLADORES
 builder.Services.AddControllers();
+builder.Services.AddHttpClient();
 
 // 2. CONFIGURACIÓN DE LA BASE DE DATOS
 builder.Services.AddScoped<IDbConnection>((sp) => 
