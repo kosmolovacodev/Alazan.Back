@@ -797,6 +797,7 @@ namespace Alazan.API.Controllers
             public int? Banco_id { get; set; }
             public string? Cuenta_clabe { get; set; }
             public string? Atiende { get; set; }
+            public string? Telefono2 { get; set; }
         }
 
         [HttpPut("editar/{catalogo}/{id}")]
@@ -815,7 +816,7 @@ namespace Alazan.API.Controllers
                     "silos-calibre" => "UPDATE dbo.silos_calibre_catalogo SET nombre = @Nombre, calibre_id = @Calibre_id, capacidad_toneladas = @Capacidad_toneladas, descripcion = @Descripcion, updated_at = GETDATE() WHERE id = @Id",
                     "silos-pulmon" => "UPDATE dbo.silos_pulmon_catalogo SET nombre = @Nombre, capacidad_toneladas = @Capacidad_toneladas, descripcion = @Descripcion, tipo = @Tipo, updated_at = GETDATE() WHERE id = @Id",
                     "bodegas" => "UPDATE dbo.catalogo_almacenes SET nombre_almacen = @Nombre, grano_id = @Grano_id, updated_at = GETDATE() WHERE id = @Id",
-                    "productores" => @"UPDATE dbo.productores SET nombre = @Nombre, telefono = @Telefono, rfc = @Rfc,
+                    "productores" => @"UPDATE dbo.productores SET nombre = @Nombre, telefono = @Telefono, telefono2 = @Telefono2, rfc = @Rfc,
                                         correo = @Correo, tipo_persona = @Tipo_persona, banco_id = @Banco_id,
                                         cuenta_clabe = @Cuenta_clabe, atiende = @Atiende, updated_at = GETDATE() WHERE id = @Id",
                     _ => null
