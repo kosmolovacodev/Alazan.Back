@@ -66,6 +66,14 @@ var app = builder.Build();
 // y en desarrollo local el frontend también envía rutas con /api/...
 app.UsePathBase("/api");
 
+// Habilitar rewind del body ANTES de cualquier middleware que pueda consumirlo
+// Necesario para que el proxy MBA3 pueda leer el body completo
+app.Use(async (context, next) =>
+{
+    context.Request.EnableBuffering();
+    await next();
+});
+
 // 4. MIDDLEWARES
 app.UseRouting();
 
