@@ -3,6 +3,7 @@ using System.Data;
 using Dapper;
 using Microsoft.AspNetCore.Authorization;
 using System.Security.Claims;
+using System.Text.Json;
 
 namespace Alazan.API.Controllers
 {
@@ -158,7 +159,9 @@ namespace Alazan.API.Controllers
                     TRY_CAST(JSON_VALUE(ac.datos_adicionales, '$.exportacion') AS DECIMAL(10,2)) AS exportacion,
                     v.bodega_ubicacion AS siloNombre,
                     p.id AS preliquidacionId,
-                    p.tipo_siembra AS tipoSiembra
+                    p.tipo_siembra AS tipoSiembra,
+                    br.productor_id AS productorId,
+                    p.divisiones_json AS divisionesJson
                 FROM dbo.boletas b
                 LEFT JOIN dbo.bascula_recepciones br ON b.bascula_id = br.id
                 LEFT JOIN dbo.granos_catalogo g ON br.grano_id = g.id
@@ -188,7 +191,24 @@ namespace Alazan.API.Controllers
         {
             try
             {
-                // 1. Insertar en la tabla preliquidaciones (tabla propia del modulo)
+                // Obtener ID de usuario desde el JWT para auditoría
+                long? usuarioId = null;
+                var usuarioIdClaim = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+                if (long.TryParse(usuarioIdClaim, out var uid))
+                    usuarioId = uid;
+
+                // Serializar divisiones si existen
+                string? divisionesJson = null;
+                if (dto.Divisiones != null && dto.Divisiones.Count > 1)
+                {
+                    divisionesJson = JsonSerializer.Serialize(new
+                    {
+                        total_productores = dto.Divisiones.Count,
+                        productores = dto.Divisiones
+                    });
+                }
+
+                // 1. Insertar en la tabla preliquidaciones
                 var sqlPreliq = @"
                     INSERT INTO dbo.preliquidaciones
                         (ticket_numero, bascula_id, boleta_id, sede_id,
@@ -196,7 +216,7 @@ namespace Alazan.API.Controllers
                          kg_neto_recibido, calibre, precio_base_mxn_ton,
                          descuento_kg_ton, kg_a_liquidar, precio_final_mxn_ton,
                          importe_total, tara_kg, peso_neto_kg, tipo_siembra,
-                         observaciones, status)
+                         observaciones, status, divisiones_json)
                     SELECT
                         b.ticket_numero,
                         b.bascula_id,
@@ -214,16 +234,21 @@ namespace Alazan.API.Controllers
                         @PesoNeto,
                         @Rt,
                         @Observaciones,
-                        'PENDIENTE'
+                        'PENDIENTE',
+                        @DivisionesJson
                     FROM dbo.boletas b
                     LEFT JOIN dbo.bascula_recepciones br ON b.bascula_id = br.id
                     WHERE b.id = @BoletaId
                       AND NOT EXISTS (SELECT 1 FROM dbo.preliquidaciones WHERE boleta_id = @BoletaId)";
 
-                await _db.ExecuteAsync(sqlPreliq, dto);
+                await _db.ExecuteAsync(sqlPreliq, new
+                {
+                    dto.PesoNeto, dto.Descuento, dto.KgALiquidar, dto.ImporteTotal,
+                    dto.PesoTara, dto.Rt, dto.Observaciones, dto.BoletaId,
+                    DivisionesJson = divisionesJson
+                });
 
                 // 2. Actualizar peso_neto_kg y tara_kg en bascula_recepciones
-                //    (el peso neto se finaliza en preliquidacion)
                 var sqlBascula = @"
                     UPDATE dbo.bascula_recepciones
                     SET peso_neto_kg = @PesoNeto,
@@ -234,36 +259,102 @@ namespace Alazan.API.Controllers
 
                 await _db.ExecuteAsync(sqlBascula, dto);
 
-                // 3. Crear registro en facturacion_recepciones (para módulo Facturación)
-                var sqlFacturacion = @"
-                    INSERT INTO dbo.facturacion_recepciones
-                        (productor_id, preliquidacion_id, boleta_id, monto_total, status,
-                         fecha_recepcion, rfc_productor, importe_factura,
-                         kg_total_entregados, precio_promedio,
-                         tiene_documentos, tiene_factura_xml,
-                         created_at, updated_at, sede_id)
-                    SELECT
-                        br.productor_id,
-                        (SELECT TOP 1 id FROM dbo.preliquidaciones WHERE boleta_id = @BoletaId ORDER BY id DESC),
-                        @BoletaId,
-                        @ImporteTotal,
-                        'PENDIENTE',
-                        GETDATE(),
-                        NULLIF(p.rfc, ''),
-                        @ImporteTotal,
-                        @KgALiquidar,
-                        b.precio_mxn,
-                        0,
-                        0,
-                        GETDATE(), GETDATE(),
-                        b.sede_id
-                    FROM dbo.boletas b
-                    LEFT JOIN dbo.bascula_recepciones br ON b.bascula_id = br.id
-                    LEFT JOIN dbo.productores p ON br.productor_id = p.id
-                    WHERE b.id = @BoletaId
-                      AND NOT EXISTS (SELECT 1 FROM dbo.facturacion_recepciones WHERE boleta_id = @BoletaId)";
+                // 3. Crear registros en facturacion_recepciones
+                if (dto.Divisiones != null && dto.Divisiones.Count > 1)
+                {
+                    // Obtener el id de la preliquidación recién creada
+                    var preliqId = await _db.ExecuteScalarAsync<int>(
+                        "SELECT TOP 1 id FROM dbo.preliquidaciones WHERE boleta_id = @BoletaId ORDER BY id DESC",
+                        new { dto.BoletaId });
 
-                await _db.ExecuteAsync(sqlFacturacion, dto);
+                    var boleta = await _db.QueryFirstOrDefaultAsync<dynamic>(
+                        "SELECT sede_id, precio_mxn, ticket_numero FROM dbo.boletas WHERE id = @BoletaId",
+                        new { dto.BoletaId });
+
+                    var sqlFactDiv = @"
+                        INSERT INTO dbo.facturacion_recepciones
+                            (productor_id, preliquidacion_id, boleta_id, monto_total, status,
+                             fecha_recepcion, rfc_productor, importe_factura,
+                             kg_total_entregados, precio_promedio,
+                             tiene_documentos, tiene_factura_xml,
+                             created_at, updated_at, sede_id, ticket_numero, usuario_registro_id)
+                        SELECT
+                            @ProductorId,
+                            @PreliqId,
+                            @BoletaId,
+                            @ImporteTotal,
+                            'PENDIENTE',
+                            GETDATE(),
+                            NULLIF(p.rfc, ''),
+                            @ImporteTotal,
+                            @KgAsignados,
+                            @PrecioMxn,
+                            0, 0,
+                            GETDATE(), GETDATE(),
+                            @SedeId,
+                            @TicketNumero,
+                            @UsuarioId
+                        FROM dbo.productores p
+                        WHERE p.id = @ProductorId";
+
+                    int orden = 1;
+                    foreach (var div in dto.Divisiones)
+                    {
+                        await _db.ExecuteAsync(sqlFactDiv, new
+                        {
+                            div.ProductorId,
+                            PreliqId = preliqId,
+                            dto.BoletaId,
+                            div.ImporteTotal,
+                            div.KgAsignados,
+                            PrecioMxn = boleta?.precio_mxn,
+                            SedeId = boleta?.sede_id,
+                            TicketNumero = $"{boleta?.ticket_numero}-P{orden}",
+                            UsuarioId = usuarioId
+                        });
+                        orden++;
+                    }
+                }
+                else
+                {
+                    // Flujo normal: un solo registro en facturacion_recepciones
+                    var sqlFacturacion = @"
+                        INSERT INTO dbo.facturacion_recepciones
+                            (productor_id, preliquidacion_id, boleta_id, monto_total, status,
+                             fecha_recepcion, rfc_productor, importe_factura,
+                             kg_total_entregados, precio_promedio,
+                             tiene_documentos, tiene_factura_xml,
+                             created_at, updated_at, sede_id, ticket_numero, usuario_registro_id)
+                        SELECT
+                            br.productor_id,
+                            (SELECT TOP 1 id FROM dbo.preliquidaciones WHERE boleta_id = @BoletaId ORDER BY id DESC),
+                            @BoletaId,
+                            @ImporteTotal,
+                            'PENDIENTE',
+                            GETDATE(),
+                            NULLIF(p.rfc, ''),
+                            @ImporteTotal,
+                            @KgALiquidar,
+                            b.precio_mxn,
+                            0, 0,
+                            GETDATE(), GETDATE(),
+                            b.sede_id,
+                            CAST(b.ticket_numero AS VARCHAR(50)),
+                            @UsuarioId
+                        FROM dbo.boletas b
+                        LEFT JOIN dbo.bascula_recepciones br ON b.bascula_id = br.id
+                        LEFT JOIN dbo.productores p ON br.productor_id = p.id
+                        WHERE b.id = @BoletaId
+                          AND NOT EXISTS (SELECT 1 FROM dbo.facturacion_recepciones WHERE boleta_id = @BoletaId)";
+
+                    await _db.ExecuteAsync(sqlFacturacion, new
+                    {
+                        dto.BoletaId,
+                        dto.ImporteTotal,
+                        dto.KgALiquidar,
+                        UsuarioId = usuarioId
+                    });
+                }
 
                 return Ok(new { message = "Pre-liquidación guardada exitosamente" });
             }
@@ -318,5 +409,14 @@ namespace Alazan.API.Controllers
         public decimal? ImporteTotal { get; set; }
         public string? Observaciones { get; set; }
         public string? Rt { get; set; }
+        public List<ProductorDivisionDto>? Divisiones { get; set; }
+    }
+
+    public class ProductorDivisionDto
+    {
+        public int ProductorId { get; set; }
+        public string Nombre { get; set; } = "";
+        public decimal KgAsignados { get; set; }
+        public decimal ImporteTotal { get; set; }
     }
 }

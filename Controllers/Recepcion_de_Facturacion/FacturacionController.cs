@@ -80,7 +80,7 @@ namespace Alazan.API.Controllers
                 var sql = @"
                     SELECT
                         ROW_NUMBER() OVER (ORDER BY fr.created_at DESC)     AS id,
-                        ISNULL(b.ticket_numero, CAST(pl.ticket_numero AS VARCHAR)) AS ticket,
+                        ISNULL(fr.ticket_numero, CAST(fr.ticket_numero AS VARCHAR)) AS ticket,
                         FORMAT(ISNULL(fr.fecha_recepcion, fr.created_at), 'dd/MM/yyyy') AS fecha,
 
                         -- RFC: fr.rfc_productor → productores.rfc → 'Pendiente RFC'

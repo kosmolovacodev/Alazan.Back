@@ -194,5 +194,63 @@ namespace SistemaAlazan.Controllers
                 return StatusCode(500, new { message = "Error al guardar", error = ex.Message });
             }
         }
+
+        // GET /api/ConfiguracionFacturacion/iprm?sedeId=X
+        [HttpGet("iprm")]
+        public async Task<IActionResult> GetIprm([FromQuery] int sedeId)
+        {
+            try
+            {
+                var sql = @"
+                    SELECT id, tipo_productor_nombre AS TipoProductorNombre, porcentaje AS Porcentaje
+                    FROM dbo.catalogo_desc_iprm
+                    WHERE sede_id = @sedeId
+                    ORDER BY id";
+                var items = await _db.QueryAsync<IprmItemDto>(sql, new { sedeId });
+                return Ok(items);
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { message = "Error al cargar IPRM", error = ex.Message });
+            }
+        }
+
+        // POST /api/ConfiguracionFacturacion/iprm/guardar?sedeId=X
+        [HttpPost("iprm/guardar")]
+        public async Task<IActionResult> GuardarIprm([FromBody] List<IprmGuardarDto> items, [FromQuery] int sedeId)
+        {
+            try
+            {
+                await _db.ExecuteAsync(
+                    "DELETE FROM dbo.catalogo_desc_iprm WHERE sede_id = @sedeId",
+                    new { sedeId });
+
+                foreach (var item in items)
+                {
+                    await _db.ExecuteAsync(@"
+                        INSERT INTO dbo.catalogo_desc_iprm (sede_id, tipo_productor_nombre, porcentaje)
+                        VALUES (@SedeId, @TipoProductorNombre, @Porcentaje)",
+                        new { SedeId = sedeId, item.TipoProductorNombre, item.Porcentaje });
+                }
+                return Ok(new { message = "IPRM guardado correctamente" });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { message = "Error al guardar IPRM", error = ex.Message });
+            }
+        }
+    }
+
+    public class IprmItemDto
+    {
+        public int Id { get; set; }
+        public string TipoProductorNombre { get; set; } = "";
+        public decimal Porcentaje { get; set; }
+    }
+
+    public class IprmGuardarDto
+    {
+        public string TipoProductorNombre { get; set; } = "";
+        public decimal Porcentaje { get; set; }
     }
 }
