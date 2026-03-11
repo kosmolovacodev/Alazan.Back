@@ -37,4 +37,5 @@ public class ConfiguracionCampoDto {
     public bool Obligatorio { get; set; }
     public bool EsSistema { get; set; }
     public string? Descripcion { get; set; }
+    public int? GranoId { get; set; }
 }

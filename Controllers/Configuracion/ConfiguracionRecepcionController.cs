@@ -59,10 +59,11 @@ public class ConfiguracionRecepcionController : ControllerBase
                 visible AS Visible,
                 obligatorio AS Obligatorio,
                 es_sistema AS EsSistema,
-                descripcion AS Descripcion
+                descripcion AS Descripcion,
+                grano_id AS GranoId
             FROM dbo.Configuracion_Campos_Pantallas
             WHERE sede_id = @sedeId
-            ORDER BY pantalla, orden",
+            ORDER BY pantalla, grano_id, orden",
             new { sedeId });
 
         return Ok(new { reglas, campos });
@@ -176,10 +177,10 @@ public class ConfiguracionRecepcionController : ControllerBase
 
             var sql = @"INSERT INTO dbo.Configuracion_Campos_Pantallas
                         (pantalla, clave_campo, nombre_mostrar, orden, visible,
-                        obligatorio, es_sistema, sede_id)
+                        obligatorio, es_sistema, sede_id, grano_id)
                         VALUES
                         (@Pantalla, @ClaveCampo, @NombreMostrar, @Orden, @Visible,
-                        @Obligatorio, @EsSistema, @SedeId);
+                        @Obligatorio, @EsSistema, @SedeId, @GranoId);
                         SELECT CAST(SCOPE_IDENTITY() as int);";
 
             dto.Id = await _db.QuerySingleAsync<int>(sql, new
@@ -191,7 +192,8 @@ public class ConfiguracionRecepcionController : ControllerBase
                 dto.Visible,
                 dto.Obligatorio,
                 dto.EsSistema,
-                SedeId = sedeId
+                SedeId = sedeId,
+                dto.GranoId
             });
             return Ok(dto);
         }

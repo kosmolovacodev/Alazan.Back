@@ -65,6 +65,10 @@ namespace Alazan.API.Controllers
             public int? Grano_id { get; set; }
             public int Sede_id { get; set; }
         }
+        public class TrenProduccionReq {
+            public string Nombre { get; set; }
+            public int Sede_id { get; set; }
+        }
         public class ProductorCatalogoReq {
             // Campos originales
             public string Nombre { get; set; }
@@ -773,6 +777,26 @@ namespace Alazan.API.Controllers
             return Ok();
         }
 
+        // --- 10. TRENES DE PRODUCCIÓN (Filtrado por sede) ---
+        [HttpGet("trenes")]
+        public async Task<IActionResult> GetTrenes([FromQuery] int sedeId)
+        {
+            string sql = @"SELECT id, nombre, sede_id AS sedeId, activo
+                          FROM dbo.cat_trenes_produccion
+                          WHERE sede_id = @sedeId
+                          ORDER BY nombre";
+            return Ok(await _db.QueryAsync(sql, new { sedeId }));
+        }
+
+        [HttpPost("trenes")]
+        public async Task<IActionResult> AddTren([FromBody] TrenProduccionReq item, [FromQuery] int sedeId)
+        {
+            const string sql = @"INSERT INTO dbo.cat_trenes_produccion (sede_id, nombre, activo, fecha_creacion)
+                                VALUES (@SedeId, @Nombre, 1, SYSDATETIMEOFFSET())";
+            await _db.ExecuteAsync(sql, new { SedeId = sedeId, item.Nombre });
+            return Ok();
+        }
+
         // --- EDICIÓN COMPLETA DE CATÁLOGOS ---
         public class EditarCatalogoReq {
             public string Nombre { get; set; }
@@ -819,6 +843,7 @@ namespace Alazan.API.Controllers
                     "productores" => @"UPDATE dbo.productores SET nombre = @Nombre, telefono = @Telefono, telefono2 = @Telefono2, rfc = @Rfc,
                                         correo = @Correo, tipo_persona = @Tipo_persona, banco_id = @Banco_id,
                                         cuenta_clabe = @Cuenta_clabe, atiende = @Atiende, updated_at = GETDATE() WHERE id = @Id",
+                    "trenes" => "UPDATE dbo.cat_trenes_produccion SET nombre = @Nombre, fecha_update = SYSDATETIMEOFFSET() WHERE id = @Id",
                     _ => null
                 };
 
@@ -873,6 +898,7 @@ namespace Alazan.API.Controllers
             "silos-calibre" => "dbo.silos_calibre_catalogo",
             "silos-pulmon" => "dbo.silos_pulmon_catalogo",
             "bodegas" => "dbo.catalogo_almacenes",
+            "trenes" => "dbo.cat_trenes_produccion",
             _ => null
         };
 
@@ -886,7 +912,7 @@ namespace Alazan.API.Controllers
 
         [HttpPut("{catalogo}/{id}")]
         public async Task<IActionResult> UpdateEstado(string catalogo, string id, [FromQuery] int sedeId, [FromBody] GenericUpdate item) {
-            var catalogosConSede = new[] { "granos", "calibres", "compradores", "origenes", "bancos", "productores", "silos-calibre", "silos-pulmon", "bodegas" };
+            var catalogosConSede = new[] { "granos", "calibres", "compradores", "origenes", "bancos", "productores", "silos-calibre", "silos-pulmon", "bodegas", "trenes" };
             var esGlobal = !catalogosConSede.Contains(catalogo);
 
             string tabla = GetTabla(catalogo);
@@ -903,14 +929,15 @@ namespace Alazan.API.Controllers
                     return StatusCode(403, "No tiene permiso para modificar este registro");
             }
 
-            await _db.ExecuteAsync($"UPDATE {tabla} SET activo = @Activo, updated_at = GETDATE() WHERE id = @id",
+            var updateTsCol = catalogo == "trenes" ? "fecha_update = SYSDATETIMEOFFSET()" : "updated_at = GETDATE()";
+            await _db.ExecuteAsync($"UPDATE {tabla} SET activo = @Activo, {updateTsCol} WHERE id = @id",
                 new { item.Activo, id = ((dynamic)idParam).id });
             return Ok();
         }
 
         [HttpDelete("{catalogo}/{id}")]
         public async Task<IActionResult> DeleteItem(string catalogo, string id, [FromQuery] int sedeId) {
-            var catalogosConSede = new[] { "granos", "calibres", "compradores", "origenes", "bancos", "productores", "silos-calibre", "silos-pulmon", "bodegas" };
+            var catalogosConSede = new[] { "granos", "calibres", "compradores", "origenes", "bancos", "productores", "silos-calibre", "silos-pulmon", "bodegas", "trenes" };
             var esGlobal = !catalogosConSede.Contains(catalogo);
 
             string tabla = GetTabla(catalogo);

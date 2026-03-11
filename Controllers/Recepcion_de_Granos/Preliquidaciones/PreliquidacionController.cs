@@ -116,6 +116,9 @@ namespace Alazan.API.Controllers
                     b.comprador,
                     b.origen,
                     b.calibre,
+                    prod.rfc,
+                    prod.atiende,
+                    p.observaciones,
                     b.humedad,
                     b.peso_bruto AS pesoBruto,
                     ISNULL(p.tara_kg, b.tara) AS pesoTara,
@@ -169,6 +172,7 @@ namespace Alazan.API.Controllers
                 LEFT JOIN dbo.volcado_bodega v ON b.bascula_id = v.bascula_id
                 LEFT JOIN dbo.preliquidaciones p ON p.boleta_id = b.id
                 LEFT JOIN dbo.boletas_precio bp ON b.id = bp.id
+                LEFT JOIN dbo.productores prod ON br.productor_id = prod.id
                 -- Unión para obtener las reglas de la sede
                 LEFT JOIN dbo.CONFIGURACION_RECEPCION_REGLAS crr ON b.sede_id = crr.sede_id
                 WHERE b.id = @boletaId

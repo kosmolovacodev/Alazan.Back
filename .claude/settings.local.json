@@ -6,7 +6,8 @@
       "Bash(cmd /c:*)",
       "Bash(pnpm add:*)",
       "Bash(where:*)",
-      "Bash(node -e \":*)"
+      "Bash(node -e \":*)",
+      "Bash(ls \"c:\\\\Users\\\\Elias\\\\Downloads\\\\alazan\\\\alazan\\\\Alazan.API\\\\SQL\"\" 2>/dev/null || echo \"no existe \")"
     ]
   }
 }
