@@ -360,7 +360,7 @@ namespace Alazan.API.Controllers
                 var sql = @"
                     SELECT
                         -- Identificación
-                        b.ticket_numero                                                 AS ticket,
+                        ISNULL(fr.ticket_numero, b.ticket_numero)                       AS ticket,
                         FORMAT(ISNULL(fr.fecha_recepcion, fr.created_at), 'dd/MM/yyyy') AS fecha,
                         FORMAT(br.fecha_hora, 'dd/MM/yyyy HH:mm')                       AS fechaHora,
 
@@ -432,7 +432,7 @@ namespace Alazan.API.Controllers
                     LEFT JOIN dbo.boletas_precio      bp  ON bp.boleta_id = b.id
                     LEFT JOIN dbo.analisis_calidad    ac  ON b.analisis_id = ac.id
                     LEFT JOIN dbo.granos_catalogo     g   ON br.grano_id = g.id
-                    WHERE b.ticket_numero = @ticket
+                    WHERE fr.ticket_numero = @ticket
                       AND (@sedeId = 0 OR fr.sede_id = @sedeId)";
 
                 var detalle = await _db.QueryFirstOrDefaultAsync<dynamic>(sql, new { ticket, sedeId });
@@ -497,8 +497,7 @@ namespace Alazan.API.Controllers
                         fr.datos_adicionales = @MergedJson,
                         fr.updated_at        = GETDATE()
                     FROM facturacion_recepciones fr
-                    INNER JOIN boletas b ON fr.boleta_id = b.id
-                    WHERE b.ticket_numero IN @Tickets
+                    WHERE fr.ticket_numero IN @Tickets
                       AND (@SedeId = 0 OR fr.sede_id = @SedeId);";
 
                 await _db.ExecuteAsync(sql, new { dto.Tickets, ImporteNum = importeNum, MergedJson = mergedJson, dto.SedeId });
@@ -533,8 +532,7 @@ namespace Alazan.API.Controllers
                 var sql = @"
                     SELECT ISNULL(fr.datos_adicionales, '{}') AS datos
                     FROM facturacion_recepciones fr
-                    INNER JOIN boletas b ON fr.boleta_id = b.id
-                    WHERE b.ticket_numero = @ticket
+                    WHERE fr.ticket_numero = @ticket
                       AND (@sedeId = 0 OR fr.sede_id = @sedeId)";
 
                 var jsonStr = await _db.QueryFirstOrDefaultAsync<string>(sql, new { ticket, sedeId });
@@ -567,8 +565,7 @@ namespace Alazan.API.Controllers
                 var existingJson = await _db.QueryFirstOrDefaultAsync<string>(@"
                     SELECT TOP 1 fr.datos_adicionales
                     FROM facturacion_recepciones fr
-                    INNER JOIN boletas b ON fr.boleta_id = b.id
-                    WHERE b.ticket_numero = @ticket
+                    WHERE fr.ticket_numero = @ticket
                       AND (@sedeId = 0 OR fr.sede_id = @sedeId)",
                     new { ticket = dto.Tickets[0], sedeId = dto.SedeId });
 
@@ -588,8 +585,7 @@ namespace Alazan.API.Controllers
                         fr.tiene_factura_xml = CASE WHEN @ResetXml = 1 THEN 0 ELSE fr.tiene_factura_xml END,
                         fr.updated_at        = GETDATE()
                     FROM facturacion_recepciones fr
-                    INNER JOIN boletas b ON fr.boleta_id = b.id
-                    WHERE b.ticket_numero IN @Tickets
+                    WHERE fr.ticket_numero IN @Tickets
                       AND (@SedeId = 0 OR fr.sede_id = @SedeId);",
                     new { dto.Tickets, MergedJson = mergedJson, dto.SedeId, ResetXml = resetXml });
 

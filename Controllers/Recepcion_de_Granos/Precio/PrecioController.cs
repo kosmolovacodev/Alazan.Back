@@ -95,7 +95,7 @@ namespace Alazan.API.Controllers
 
                 // Obtener la boleta_precio y su boleta_id
                 var boletaPrecio = await _db.QueryFirstOrDefaultAsync<dynamic>(@"
-                    SELECT bp.id, bp.boleta_id, b.bascula_id
+                    SELECT bp.id, bp.boleta_id, bp.precio_sugerido, b.bascula_id
                     FROM dbo.boletas_precio bp
                     LEFT JOIN dbo.boletas b ON bp.boleta_id = b.id
                     WHERE bp.id = @BoletaPrecioId AND (@sedeId = 0 OR bp.sede_id = @sedeId)",
@@ -127,6 +127,9 @@ namespace Alazan.API.Controllers
                     SET estatus = @NuevoEstatus,
                         precio_autorizado = @PrecioAutorizado,
                         precio_final = @PrecioAutorizado,
+                        precio_original = @PrecioOriginal,
+                        precio_modificado = @PrecioAutorizado,
+                        justificacion = @Justificacion,
                         tiempo_autorizacion = SYSDATETIMEOFFSET(),
                         usuario_autorizacion = @Usuario,
                         autorizacion_automatica = @EsAutomatica,
@@ -137,6 +140,8 @@ namespace Alazan.API.Controllers
                     {
                         NuevoEstatus = nuevoEstatus,
                         dto.PrecioAutorizado,
+                        PrecioOriginal = (decimal?)boletaPrecio.precio_sugerido,
+                        Justificacion = dto.Observaciones ?? "",
                         Usuario = usuario,
                         EsAutomatica = dto.AutorizacionAutomatica,
                         TipoAuth = dto.TipoAutorizacion ?? "NORMAL",

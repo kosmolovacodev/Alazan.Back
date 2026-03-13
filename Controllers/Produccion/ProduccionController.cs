@@ -305,13 +305,36 @@ namespace Alazan.API.Controllers
         public async Task<IActionResult> GetAnalisis([FromQuery] int sedeId)
         {
             var lista = await _db.QueryAsync(
-                @"SELECT id, no_orden AS noOrden, fecha, envasado, producto, cosecha, proceso, silo, variedad,
-                         fecha_registro AS fechaRegistro
-                  FROM dbo.analisiscalidad_proceso
-                  WHERE sede_id = @sedeId
-                  ORDER BY fecha_registro DESC",
+                @"SELECT acp.id, acp.no_orden AS noOrden, acp.fecha, acp.envasado, acp.producto,
+                         acp.cosecha, acp.proceso, acp.silo, acp.variedad,
+                         acp.fecha_registro AS fechaRegistro
+                  FROM dbo.analisiscalidad_proceso acp
+                  LEFT JOIN dbo.ordenesproduccion op
+                         ON op.no_orden = acp.no_orden AND op.sede_id = acp.sede_id
+                  WHERE acp.sede_id = @sedeId
+                    AND ISNULL(acp.finalizado, 0) = 0
+                    AND ISNULL(op.status, 'Pendiente') <> 'Resultado Registrado'
+                  ORDER BY acp.fecha_registro DESC",
                 new { sedeId });
             return Ok(lista);
+        }
+
+        [HttpPost("analisis/{id}/finalizar")]
+        public async Task<IActionResult> FinalizarAnalisis(int id)
+        {
+            try
+            {
+                await _db.ExecuteAsync(
+                    @"UPDATE dbo.analisiscalidad_proceso
+                      SET finalizado = 1, fecha_actualizacion = SYSDATETIMEOFFSET()
+                      WHERE id = @Id",
+                    new { Id = id });
+                return Ok(new { message = "Análisis finalizado" });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { message = "Error al finalizar análisis", error = ex.Message });
+            }
         }
 
         [HttpGet("analisis/{id}")]
