@@ -422,7 +422,8 @@ namespace Alazan.API.Controllers
                         ISNULL(fr.tiene_documentos, 0)                                  AS tieneDocumentos,
                         ISNULL(fr.tiene_factura_xml, 0)                                 AS tieneFacturaXML,
                         br.grano_id                                                     AS granoId,
-                        ac.datos_adicionales                                            AS analisisDatosAdicionales
+                        ac.datos_adicionales                                            AS analisisDatosAdicionales,
+                        TRY_CAST(JSON_VALUE(ac.datos_adicionales, '$.exportacion') AS DECIMAL(10,2)) AS exportacion
 
                     FROM dbo.facturacion_recepciones fr
                     LEFT JOIN dbo.preliquidaciones    pl  ON fr.preliquidacion_id = pl.id

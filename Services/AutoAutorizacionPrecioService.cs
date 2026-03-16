@@ -77,13 +77,16 @@ namespace Alazan.API.Services
                             // Extraemos valores dinámicos a variables locales para evitar errores de tipos
                             int bId = (int)boleta.id;
                             int basId = (int)boleta.bascula_id;
-                            decimal precio = (decimal)boleta.precio_mxn;
+                            decimal precioRaw = (decimal)boleta.precio_mxn;
+                            // Normalizar: si el precio viene en escala MXN/ton (>100), convertir a MXN/kg
+                            decimal precio = precioRaw > 100m ? precioRaw / 1000m : precioRaw;
                             int? bpId = boleta.boleta_precio_id != null ? (int)boleta.boleta_precio_id : null;
 
                             // A. Actualizar dbo.boletas
                             await db.ExecuteAsync(@"
                                 UPDATE dbo.boletas
                                 SET status = 'Precio Autorizado',
+                                    peso_neto = 0,
                                     observaciones = ISNULL(observaciones, '') + ' | Auto-Auth (' + CAST(@minutos AS VARCHAR) + ' min)',
                                     updated_at = SYSDATETIMEOFFSET()
                                 WHERE id = @bId",

@@ -375,10 +375,10 @@ namespace Alazan.API.Controllers
                         Humedad = dto.Humedad,
                         PesoBruto = pesoBruto,
                         Tara = tara,
-                        PesoNeto = pesoNeto,
+                        PesoNeto = 0m,   // El peso neto real se calcula en preliquidación (tara aún desconocida)
                         PrecioBaseUsd = precioBaseUsd,
                         TipoCambio = tipoCambio,
-                        PrecioMxn = precioSugerido,
+                        PrecioMxn = precioSugerido / 1000m,   // Convertir MXN/ton → MXN/kg
                         DescuentoKgTon = descuentoPrecio,
                         KgALiquidar = 0m,
                         ImporteTotal = 0m,
@@ -421,7 +421,7 @@ namespace Alazan.API.Controllers
                         PesoBruto = pesoBruto,
                         TonsAprox = toneladas,
                         DescuentoKgTon = descuentoPrecio,
-                        PrecioSugerido = precioSugerido,
+                        PrecioSugerido = precioSugerido / 1000m,   // Convertir MXN/ton → MXN/kg
                         PrecioSugeridoCodigo = precioSugeridoCodigo,
                         UsuarioRegistro = nombreUsuario,
                         BoletaId = boletaId,
