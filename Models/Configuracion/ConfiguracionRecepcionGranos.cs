@@ -38,4 +38,6 @@ public class ConfiguracionCampoDto {
     public bool EsSistema { get; set; }
     public string? Descripcion { get; set; }
     public int? GranoId { get; set; }
+    public string TipoDato { get; set; } = "texto";
+    public bool AfectaExportacion { get; set; } = false;
 }

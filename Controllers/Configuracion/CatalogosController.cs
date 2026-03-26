@@ -47,23 +47,27 @@ namespace Alazan.API.Controllers
             public string Ciudad { get; set; }
             public string Estado { get; set; }
             public decimal Tope_diario { get; set; }
+            public string? Codigo { get; set; }
         }
         public class SiloCalibreReq {
             public string Nombre { get; set; }
             public int? CalibreId { get; set; }
             public decimal Capacidad_toneladas { get; set; }
             public string Descripcion { get; set; }
+            public string? Codigo { get; set; }
         }
         public class SiloPulmonReq {
             public string Nombre { get; set; }
             public decimal Capacidad_toneladas { get; set; }
             public string Descripcion { get; set; }
             public string Tipo { get; set; } // Ej: "ENTRADA", "SALIDA", "TEMPORAL"
+            public string? Codigo { get; set; }
         }
         public class AlmacenReq {
             public string Nombre { get; set; }
             public int? Grano_id { get; set; }
             public int Sede_id { get; set; }
+            public string? Codigo { get; set; }
         }
         public class TrenProduccionReq {
             public string Nombre { get; set; }
@@ -652,16 +656,17 @@ namespace Alazan.API.Controllers
 
         // --- 6. SEDES (Global) ---
         [HttpGet("sedes")]
-        public async Task<IActionResult> GetSedes() 
+        public async Task<IActionResult> GetSedes()
         {
             return Ok(await _db.QueryAsync(@"
-                SELECT 
-                    id, 
-                    nombre_sede as nombre, 
-                    ciudad, 
-                    estado, 
-                    tope_diario, 
-                    activo 
+                SELECT
+                    id,
+                    nombre_sede as nombre,
+                    ciudad,
+                    estado,
+                    tope_diario,
+                    codigo,
+                    activo
                 FROM dbo.sedes_catalogo"));
         }
 
@@ -671,10 +676,10 @@ namespace Alazan.API.Controllers
             try 
             {
                 const string sql = @"
-                    INSERT INTO dbo.sedes_catalogo 
-                    (nombre_sede, ciudad, estado, tope_diario, activo, created_at) 
-                    VALUES 
-                    (@Nombre, @Ciudad, @Estado, @Tope_diario, 1, GETDATE())";
+                    INSERT INTO dbo.sedes_catalogo
+                    (nombre_sede, ciudad, estado, tope_diario, codigo, activo, created_at)
+                    VALUES
+                    (@Nombre, @Ciudad, @Estado, @Tope_diario, @Codigo, 1, GETDATE())";
                     
                 await _db.ExecuteAsync(sql, item);
                 return Ok();
@@ -696,6 +701,7 @@ namespace Alazan.API.Controllers
                             c.calibre_mm as calibreNombre,
                             sc.capacidad_toneladas as capacidadToneladas,
                             sc.descripcion,
+                            sc.codigo,
                             sc.activo
                           FROM dbo.silos_calibre_catalogo sc
                           LEFT JOIN dbo.calibres_catalogo c ON sc.calibre_id = c.id
@@ -707,13 +713,14 @@ namespace Alazan.API.Controllers
         public async Task<IActionResult> AddSiloCalibre([FromBody] SiloCalibreReq item, [FromQuery] int sedeId)
         {
             const string sql = @"INSERT INTO dbo.silos_calibre_catalogo
-                                (nombre, calibre_id, capacidad_toneladas, descripcion, activo, sede_id, created_at)
-                                VALUES (@Nombre, @CalibreId, @CapacidadToneladas, @Descripcion, 1, @SedeId, GETDATE())";
+                                (nombre, calibre_id, capacidad_toneladas, descripcion, codigo, activo, sede_id, created_at)
+                                VALUES (@Nombre, @CalibreId, @CapacidadToneladas, @Descripcion, @Codigo, 1, @SedeId, GETDATE())";
             await _db.ExecuteAsync(sql, new {
                 item.Nombre,
                 item.CalibreId,
                 CapacidadToneladas = item.Capacidad_toneladas,
                 item.Descripcion,
+                item.Codigo,
                 SedeId = sedeId
             });
             return Ok();
@@ -729,6 +736,7 @@ namespace Alazan.API.Controllers
                             capacidad_toneladas as capacidadToneladas,
                             descripcion,
                             tipo,
+                            codigo,
                             activo
                           FROM dbo.silos_pulmon_catalogo
                           WHERE @sedeId = 0 OR sede_id = @sedeId OR sede_id = 0 OR sede_id IS NULL";
@@ -739,13 +747,14 @@ namespace Alazan.API.Controllers
         public async Task<IActionResult> AddSiloPulmon([FromBody] SiloPulmonReq item, [FromQuery] int sedeId)
         {
             const string sql = @"INSERT INTO dbo.silos_pulmon_catalogo
-                                (nombre, capacidad_toneladas, descripcion, tipo, activo, sede_id, created_at)
-                                VALUES (@Nombre, @CapacidadToneladas, @Descripcion, @Tipo, 1, @SedeId, GETDATE())";
+                                (nombre, capacidad_toneladas, descripcion, tipo, codigo, activo, sede_id, created_at)
+                                VALUES (@Nombre, @CapacidadToneladas, @Descripcion, @Tipo, @Codigo, 1, @SedeId, GETDATE())";
             await _db.ExecuteAsync(sql, new {
                 item.Nombre,
                 CapacidadToneladas = item.Capacidad_toneladas,
                 item.Descripcion,
                 item.Tipo,
+                item.Codigo,
                 SedeId = sedeId
             });
             return Ok();
@@ -760,6 +769,7 @@ namespace Alazan.API.Controllers
                             ca.nombre_almacen AS nombre,
                             ca.grano_id AS granoId,
                             g.nombre AS granoNombre,
+                            ca.codigo,
                             ca.activo
                           FROM dbo.catalogo_almacenes ca
                           LEFT JOIN dbo.granos_catalogo g ON ca.grano_id = g.id
@@ -771,9 +781,9 @@ namespace Alazan.API.Controllers
         public async Task<IActionResult> AddBodega([FromBody] AlmacenReq item)
         {
             const string sql = @"INSERT INTO dbo.catalogo_almacenes
-                                (nombre_almacen, grano_id, activo, sede_id)
-                                VALUES (@Nombre, @GranoId, 1, @SedeId)";
-            await _db.ExecuteAsync(sql, new { item.Nombre, GranoId = item.Grano_id, SedeId = item.Sede_id });
+                                (nombre_almacen, grano_id, codigo, activo, sede_id)
+                                VALUES (@Nombre, @GranoId, @Codigo, 1, @SedeId)";
+            await _db.ExecuteAsync(sql, new { item.Nombre, GranoId = item.Grano_id, item.Codigo, SedeId = item.Sede_id });
             return Ok();
         }
 
@@ -836,10 +846,10 @@ namespace Alazan.API.Controllers
                     "compradores" => "UPDATE dbo.compradores_catalogo SET nombre = @Nombre, telefono = @Telefono, updated_at = GETDATE() WHERE id = @Id",
                     "origenes" => "UPDATE dbo.origenes_catalogo SET municipio = @Municipio, estado = @Estado, region = @Region, updated_at = GETDATE() WHERE id = @Id",
                     "bancos" => "UPDATE dbo.bancos_catalogo SET nombre_banco = @Nombre, codigo_banco = @Codigo, updated_at = GETDATE() WHERE id = @Id",
-                    "sedes" => "UPDATE dbo.sedes_catalogo SET nombre_sede = @Nombre, ciudad = @Ciudad, estado = @Estado, tope_diario = @Tope_diario WHERE id = @Id",
-                    "silos-calibre" => "UPDATE dbo.silos_calibre_catalogo SET nombre = @Nombre, calibre_id = @Calibre_id, capacidad_toneladas = @Capacidad_toneladas, descripcion = @Descripcion, updated_at = GETDATE() WHERE id = @Id",
-                    "silos-pulmon" => "UPDATE dbo.silos_pulmon_catalogo SET nombre = @Nombre, capacidad_toneladas = @Capacidad_toneladas, descripcion = @Descripcion, tipo = @Tipo, updated_at = GETDATE() WHERE id = @Id",
-                    "bodegas" => "UPDATE dbo.catalogo_almacenes SET nombre_almacen = @Nombre, grano_id = @Grano_id, updated_at = GETDATE() WHERE id = @Id",
+                    "sedes" => "UPDATE dbo.sedes_catalogo SET nombre_sede = @Nombre, ciudad = @Ciudad, estado = @Estado, tope_diario = @Tope_diario, codigo = @Codigo WHERE id = @Id",
+                    "silos-calibre" => "UPDATE dbo.silos_calibre_catalogo SET nombre = @Nombre, calibre_id = @Calibre_id, capacidad_toneladas = @Capacidad_toneladas, descripcion = @Descripcion, codigo = @Codigo, updated_at = GETDATE() WHERE id = @Id",
+                    "silos-pulmon" => "UPDATE dbo.silos_pulmon_catalogo SET nombre = @Nombre, capacidad_toneladas = @Capacidad_toneladas, descripcion = @Descripcion, tipo = @Tipo, codigo = @Codigo, updated_at = GETDATE() WHERE id = @Id",
+                    "bodegas" => "UPDATE dbo.catalogo_almacenes SET nombre_almacen = @Nombre, grano_id = @Grano_id, codigo = @Codigo WHERE id = @Id",
                     "productores" => @"UPDATE dbo.productores SET nombre = @Nombre, telefono = @Telefono, telefono2 = @Telefono2, rfc = @Rfc,
                                         correo = @Correo, tipo_persona = @Tipo_persona, banco_id = @Banco_id,
                                         cuenta_clabe = @Cuenta_clabe, atiende = @Atiende, updated_at = GETDATE() WHERE id = @Id",

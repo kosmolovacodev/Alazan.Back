@@ -155,11 +155,14 @@ namespace Alazan.API.Controllers
 
                     decimal precioSugerido = 0;
                     string precioSugeridoCodigo = "SIN-CONFIG";
-                    decimal descuentoCalibre = 0;
+                    // true = precio ya está en $/kg (no necesita dividir entre 1000)
+                    bool precioYaEnKg = false;
+
+                    bool esGarbanzo = granoNombreCheck.Contains("Garbanzo", StringComparison.OrdinalIgnoreCase);
 
                     if (esFrijol)
                     {
-                        // FRIJOL: El precio sugerido es directamente el descuento_kg_ton del calibre asignado
+                        // FRIJOL: descuento_kg_ton está en $/kg, NO dividir entre 1000
                         if (!string.IsNullOrEmpty(dto.Calibre))
                         {
                             var precioCalibreFrijol = await _db.QueryFirstOrDefaultAsync<decimal?>(@"
@@ -170,13 +173,71 @@ namespace Alazan.API.Controllers
                             );
                             precioSugerido = precioCalibreFrijol ?? 0;
                             precioSugeridoCodigo = dto.Calibre;
+                            precioYaEnKg = true;
+                        }
+                    }
+                    else if (esGarbanzo)
+                    {
+                        // GARBANZO: Precios por Clasificación (CAL.EXP, CAL 1, CAL 2)
+                        // Precio = Σ (pct_clasificacion/100 × precio_kg_clasificacion)
+                        var clasificaciones = await _db.QueryAsync<dynamic>(@"
+                            SELECT codigo, precio_kg
+                            FROM dbo.precios_clasificacion
+                            WHERE sede_id = @SedeId AND grano_id = @GranoId AND activo = 1",
+                            new { SedeId = datosBascula.sede_id, GranoId = (int)(datosBascula.grano_id ?? 0) },
+                            transaction
+                        );
+
+                        if (clasificaciones.Any() && !string.IsNullOrEmpty(dto.DatosAdicionales))
+                        {
+                            try
+                            {
+                                var datosJson = System.Text.Json.JsonDocument.Parse(dto.DatosAdicionales);
+                                var precioTotal = 0m;
+                                var pctTotal = 0m;
+
+                                foreach (var cls in clasificaciones)
+                                {
+                                    string clave = ((string)(cls.codigo ?? "")).ToLower().Replace(".", "").Replace(" ", "_");
+                                    // CAL_EXP se guarda como 'exportacion' en datos_adicionales (es el % de Exportación)
+                                    bool esCalExp = clave.Contains("exp");
+                                    System.Text.Json.JsonElement pctEl;
+                                    bool found = datosJson.RootElement.TryGetProperty(clave, out pctEl);
+                                    if (!found && esCalExp)
+                                        found = datosJson.RootElement.TryGetProperty("exportacion", out pctEl);
+                                    if (found)
+                                    {
+                                        decimal pct = 0m;
+                                        if (pctEl.ValueKind == System.Text.Json.JsonValueKind.Number)
+                                            pct = pctEl.GetDecimal();
+                                        else if (pctEl.ValueKind == System.Text.Json.JsonValueKind.String)
+                                            decimal.TryParse(pctEl.GetString(), System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out pct);
+                                        precioTotal += (pct / 100m) * (decimal)(cls.precio_kg ?? 0);
+                                        pctTotal += pct;
+                                    }
+                                }
+
+                                // Si no se enviaron porcentajes, usar el precio de CAL.EXP como referencia
+                                if (pctTotal == 0m)
+                                {
+                                    var calExp = clasificaciones.FirstOrDefault(c =>
+                                        ((string)(c.codigo ?? "")).Contains("EXP", StringComparison.OrdinalIgnoreCase));
+                                    if (calExp != null) precioTotal = (decimal)(calExp.precio_kg ?? 0);
+                                }
+
+                                precioSugerido = precioTotal;
+                                precioSugeridoCodigo = "CLASIF";
+                                precioYaEnKg = true;
+                            }
+                            catch
+                            {
+                                precioSugerido = 0;
+                            }
                         }
                     }
                     else
                     {
-                        // GARBANZO y otros granos: Lógica de niveles de precio cascada (P1-P27)
-
-                        // Extraer porcentaje de exportación de datos_adicionales
+                        // Otros granos: mantener lógica P1-P27 (MXN/ton → dividir entre 1000 al insertar)
                         decimal porcentajeExportacion = 0;
                         if (!string.IsNullOrEmpty(dto.DatosAdicionales))
                         {
@@ -184,98 +245,59 @@ namespace Alazan.API.Controllers
                             {
                                 var datosJson = System.Text.Json.JsonDocument.Parse(dto.DatosAdicionales);
                                 if (datosJson.RootElement.TryGetProperty("exportacion", out var exportacionElement))
-                                {
                                     porcentajeExportacion = exportacionElement.GetDecimal();
-                                }
                             }
-                            catch
-                            {
-                                porcentajeExportacion = 0;
-                            }
+                            catch { }
                         }
 
-                        // Obtener todos los niveles de precio ordenados por numero de nivel (P1, P2, ..., P27)
                         var nivelesPrecio = await _db.QueryAsync<dynamic>(@"
-                            SELECT n.id, n.codigo, n.porcentaje_export_label, n.precio_final_mxn,
-                                   n.descuento_precio_id
+                            SELECT n.id, n.codigo, n.precio_final_mxn, n.descuento_precio_id
                             FROM NivelesPrecioExportacion n
-                            WHERE n.sede_id = @SedeId
-                              AND n.vigente = 1
+                            WHERE n.sede_id = @SedeId AND n.vigente = 1
                             ORDER BY TRY_CAST(REPLACE(n.codigo, 'P', '') AS INT) ASC",
-                            new { SedeId = datosBascula.sede_id },
-                            transaction
-                        );
+                            new { SedeId = datosBascula.sede_id }, transaction);
 
-                        // Obtener descuentos de precio para calcular precios acumulativos
                         var descuentosPrecio = await _db.QueryAsync<dynamic>(@"
-                            SELECT id, descuento_mxn
-                            FROM dbo.DescuentosPrecio_Catalogo
-                            WHERE sede_id = @SedeId",
-                            new { SedeId = datosBascula.sede_id },
-                            transaction
-                        );
+                            SELECT id, descuento_mxn FROM dbo.DescuentosPrecio_Catalogo WHERE sede_id = @SedeId",
+                            new { SedeId = datosBascula.sede_id }, transaction);
 
-                        // Crear mapa de descuentos por ID
                         var descuentosMap = new Dictionary<int, decimal>();
                         foreach (var d in descuentosPrecio)
-                        {
                             descuentosMap[(int)d.id] = (decimal)(d.descuento_mxn ?? 0);
-                        }
 
-                        // Obtener descuento de calibre ANTES de calcular precios
+                        decimal descuentoCalibre = 0;
                         if (!string.IsNullOrEmpty(dto.Calibre))
                         {
                             var calibreDesc = await _db.QueryFirstOrDefaultAsync<decimal?>(@"
                                 SELECT descuento_kg_ton FROM dbo.DescuentosCalibre_Catalogo
                                 WHERE sede_id = @SedeId AND calibre = @Calibre",
-                                new { SedeId = datosBascula.sede_id, Calibre = dto.Calibre },
-                                transaction
-                            );
+                                new { SedeId = datosBascula.sede_id, Calibre = dto.Calibre }, transaction);
                             descuentoCalibre = calibreDesc ?? 0;
                         }
 
-                        // Calcular precios acumulativos:
-                        // P1 = (precio_final_mxn - descuento_calibre) - DP1
-                        // P2 = P1 - DP2, P3 = P2 - DP3, etc.
                         var preciosCalculados = new Dictionary<string, decimal>();
                         decimal precioAcumulado = 0;
                         int indice = 0;
-
                         foreach (var nivel in nivelesPrecio)
                         {
                             string cod = nivel.codigo ?? "";
                             if (indice == 0)
-                            {
-                                // P1: precio base - descuento calibre
                                 precioAcumulado = (decimal)(nivel.precio_final_mxn ?? 0) - descuentoCalibre;
-                            }
-
-                            // Restar el DP del nivel (para TODOS, incluido P1 si tiene descuento_precio_id)
                             int? descuentoId = (int?)nivel.descuento_precio_id;
                             if (descuentoId.HasValue && descuentosMap.ContainsKey(descuentoId.Value))
-                            {
                                 precioAcumulado -= descuentosMap[descuentoId.Value];
-                            }
-
                             if (precioAcumulado < 0) precioAcumulado = 0;
                             preciosCalculados[cod] = precioAcumulado;
                             indice++;
                         }
 
-                        // Buscar el nivel correcto basado en el porcentaje de exportacion
-                        // P1 = >= 80%, P2 = >= 79%, ..., P27 = < 54%
                         foreach (var nivel in nivelesPrecio)
                         {
                             string codigo = nivel.codigo ?? "";
                             int porcentajeMinimo = 0;
-
                             var match = System.Text.RegularExpressions.Regex.Match(codigo, @"P(\d+)");
                             if (match.Success)
-                            {
-                                int numeroNivel = int.Parse(match.Groups[1].Value);
-                                porcentajeMinimo = 81 - numeroNivel;
-                            }
-
+                                porcentajeMinimo = 81 - int.Parse(match.Groups[1].Value);
                             if (porcentajeExportacion >= porcentajeMinimo)
                             {
                                 precioSugerido = preciosCalculados.ContainsKey(codigo) ? preciosCalculados[codigo] : 0;
@@ -284,7 +306,6 @@ namespace Alazan.API.Controllers
                             }
                         }
 
-                        // Si no encontro nivel, usar el ultimo
                         if (precioSugerido == 0 && preciosCalculados.Any())
                         {
                             var ultimo = preciosCalculados.Last();
@@ -378,7 +399,7 @@ namespace Alazan.API.Controllers
                         PesoNeto = 0m,   // El peso neto real se calcula en preliquidación (tara aún desconocida)
                         PrecioBaseUsd = precioBaseUsd,
                         TipoCambio = tipoCambio,
-                        PrecioMxn = precioSugerido / 1000m,   // Convertir MXN/ton → MXN/kg
+                        PrecioMxn = precioYaEnKg ? precioSugerido : precioSugerido / 1000m,
                         DescuentoKgTon = descuentoPrecio,
                         KgALiquidar = 0m,
                         ImporteTotal = 0m,
@@ -421,7 +442,7 @@ namespace Alazan.API.Controllers
                         PesoBruto = pesoBruto,
                         TonsAprox = toneladas,
                         DescuentoKgTon = descuentoPrecio,
-                        PrecioSugerido = precioSugerido / 1000m,   // Convertir MXN/ton → MXN/kg
+                        PrecioSugerido = precioYaEnKg ? precioSugerido : precioSugerido / 1000m,
                         PrecioSugeridoCodigo = precioSugeridoCodigo,
                         UsuarioRegistro = nombreUsuario,
                         BoletaId = boletaId,
@@ -547,6 +568,7 @@ namespace Alazan.API.Controllers
                     R2Manchado = dto.R2Manchado,
                     R2Arrugado = dto.R2Arrugado,
                     DatosAdicionales = dto.DatosAdicionales,
+                    GranoId = dto.GranoId,
                     basculaId = basculaId
                 });
 
@@ -554,6 +576,13 @@ namespace Alazan.API.Controllers
                 {
                     return NotFound(new { message = "No se encontró el análisis para actualizar" });
                 }
+
+                // Asegurar que el estatus quede en ANALIZADO aunque venga de PENDIENTE
+                await _db.ExecuteAsync(@"
+                    UPDATE bascula_recepciones
+                    SET status = 'ANALIZADO', updated_at = GETDATE()
+                    WHERE id = @basculaId AND status = 'PENDIENTE'",
+                    new { basculaId });
 
                 return Ok(new { message = "Análisis actualizado correctamente" });
             }

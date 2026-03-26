@@ -1,6 +1,6 @@
 public class TramaRecepcionDTO
 {
-   public string operacion { get; set; }
+    public int operacion { get; set; }
     public string codigo_empresa { get; set; }
     public string codigo_sucursal { get; set; }
     public string numero_documento { get; set; }

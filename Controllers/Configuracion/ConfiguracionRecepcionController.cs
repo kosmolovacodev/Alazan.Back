@@ -60,7 +60,9 @@ public class ConfiguracionRecepcionController : ControllerBase
                 obligatorio AS Obligatorio,
                 es_sistema AS EsSistema,
                 descripcion AS Descripcion,
-                grano_id AS GranoId
+                grano_id AS GranoId,
+                ISNULL(tipo_dato, 'texto') AS TipoDato,
+                ISNULL(afecta_exportacion, 0) AS AfectaExportacion
             FROM dbo.Configuracion_Campos_Pantallas
             WHERE sede_id = @sedeId
             ORDER BY pantalla, grano_id, orden",
@@ -177,10 +179,10 @@ public class ConfiguracionRecepcionController : ControllerBase
 
             var sql = @"INSERT INTO dbo.Configuracion_Campos_Pantallas
                         (pantalla, clave_campo, nombre_mostrar, orden, visible,
-                        obligatorio, es_sistema, sede_id, grano_id)
+                        obligatorio, es_sistema, sede_id, grano_id, tipo_dato, afecta_exportacion)
                         VALUES
                         (@Pantalla, @ClaveCampo, @NombreMostrar, @Orden, @Visible,
-                        @Obligatorio, @EsSistema, @SedeId, @GranoId);
+                        @Obligatorio, @EsSistema, @SedeId, @GranoId, @TipoDato, @AfectaExportacion);
                         SELECT CAST(SCOPE_IDENTITY() as int);";
 
             dto.Id = await _db.QuerySingleAsync<int>(sql, new
@@ -193,7 +195,9 @@ public class ConfiguracionRecepcionController : ControllerBase
                 dto.Obligatorio,
                 dto.EsSistema,
                 SedeId = sedeId,
-                dto.GranoId
+                dto.GranoId,
+                dto.TipoDato,
+                dto.AfectaExportacion
             });
             return Ok(dto);
         }
@@ -238,7 +242,9 @@ public class ConfiguracionRecepcionController : ControllerBase
                     orden = @Orden,
                     visible = CASE WHEN @Visible = 1 THEN 1 ELSE 0 END,
                     obligatorio = CASE WHEN @Obligatorio = 1 THEN 1 ELSE 0 END,
-                    nombre_mostrar = @NombreMostrar
+                    nombre_mostrar = @NombreMostrar,
+                    tipo_dato = @TipoDato,
+                    afecta_exportacion = CASE WHEN @AfectaExportacion = 1 THEN 1 ELSE 0 END
                 WHERE id = @Id";
 
             // Ejecutamos el update masivo

@@ -118,7 +118,7 @@ namespace Alazan.API.Controllers
                     b.calibre,
                     prod.rfc,
                     prod.atiende,
-                    p.observaciones,
+                    ISNULL(prod.nombre, b.productor) AS razonSocial,
                     b.humedad,
                     b.peso_bruto AS pesoBruto,
                     p.tara_kg AS pesoTara,
@@ -129,11 +129,13 @@ namespace Alazan.API.Controllers
                     ISNULL(p.kg_a_liquidar, b.kg_a_liquidar) AS kgALiquidar,
                     ISNULL(p.importe_total, b.importe_total) AS importeTotal,
                     
-                    -- Lógica de Observaciones integrada basada en el Tipo de Productor
-                    CASE 
-                        WHEN JSON_VALUE(br.datos_adicionales, '$.tipo_productor') = 'Ejidal' THEN CAST(crr.tpl_ejidal AS TEXT)
-                        WHEN JSON_VALUE(br.datos_adicionales, '$.tipo_productor') = 'Pequeña Propiedad' THEN CAST(crr.tpl_pequena_propiedad AS TEXT)
-                        ELSE 'NA'
+                    -- Observaciones: si ya hay preliquidación guardada usar la guardada, si no usar plantilla según tipo productor
+                    CASE
+                        WHEN p.id IS NOT NULL THEN p.observaciones
+                        WHEN JSON_VALUE(br.datos_adicionales, '$.tipo_productor') = 'Ejidal'            THEN CAST(crr.tpl_ejidal AS NVARCHAR(MAX))
+                        WHEN JSON_VALUE(br.datos_adicionales, '$.tipo_productor') = 'Pequeña Propiedad' THEN CAST(crr.tpl_pequena_propiedad AS NVARCHAR(MAX))
+                        WHEN JSON_VALUE(br.datos_adicionales, '$.tipo_productor') = 'Persona Moral'     THEN CAST(crr.tpl_persona_moral AS NVARCHAR(MAX))
+                        ELSE CAST(crr.tpl_ejidal AS NVARCHAR(MAX))
                     END AS observaciones,
 
                     b.status,

@@ -237,7 +237,7 @@ namespace Alazan.API.Controllers
                 // Sincronizar estatus en boletas_precio
                 await _db.ExecuteAsync(@"
                     UPDATE dbo.boletas_precio
-                    SET estatus = 'Precio Autorizado',
+                    SET estatus = @NuevoEstatus,
                         fecha_modificacion = SYSDATETIMEOFFSET()
                     WHERE boleta_id = @BoletaId",
                     new { NuevoEstatus = nuevoEstatus, dto.BoletaId });
