@@ -129,6 +129,7 @@ namespace Alazan.API.Controllers
                         precio_final = @PrecioAutorizado,
                         precio_original = @PrecioOriginal,
                         precio_modificado = @PrecioAutorizado,
+                        descuento_kg_ton = CASE WHEN @DescuentoKg IS NOT NULL THEN @DescuentoKg ELSE descuento_kg_ton END,
                         justificacion = @Justificacion,
                         tiempo_autorizacion = SYSDATETIMEOFFSET(),
                         usuario_autorizacion = @Usuario,
@@ -141,6 +142,7 @@ namespace Alazan.API.Controllers
                         NuevoEstatus = nuevoEstatus,
                         dto.PrecioAutorizado,
                         PrecioOriginal = (decimal?)boletaPrecio.precio_sugerido,
+                        DescuentoKg = dto.DescuentoKg,
                         Justificacion = dto.Observaciones ?? "",
                         Usuario = usuario,
                         EsAutomatica = dto.AutorizacionAutomatica,
@@ -156,6 +158,7 @@ namespace Alazan.API.Controllers
                         UPDATE dbo.boletas
                         SET status = @NuevoEstatus,
                             precio_mxn = @PrecioAutorizado,
+                            descuento_kg_ton = CASE WHEN @DescuentoKg IS NOT NULL THEN @DescuentoKg ELSE descuento_kg_ton END,
                             peso_neto = 0,
                             observaciones = ISNULL(observaciones, '') + ' | Autorizado (' + @TipoAuth + '): ' + @Observaciones,
                             updated_at = SYSDATETIMEOFFSET()
@@ -164,6 +167,7 @@ namespace Alazan.API.Controllers
                         {
                             NuevoEstatus = nuevoEstatus,
                             dto.PrecioAutorizado,
+                            DescuentoKg = dto.DescuentoKg,
                             TipoAuth = dto.TipoAutorizacion ?? "NORMAL",
                             Observaciones = dto.Observaciones ?? "",
                             BoletaId = (int)boletaPrecio.boleta_id

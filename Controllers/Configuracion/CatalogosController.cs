@@ -809,19 +809,19 @@ namespace Alazan.API.Controllers
 
         // --- EDICIÓN COMPLETA DE CATÁLOGOS ---
         public class EditarCatalogoReq {
-            public string Nombre { get; set; }
+            public string? Nombre { get; set; }
             public bool Requiere_analisis { get; set; }
-            public string Telefono { get; set; }
-            public string Municipio { get; set; }
-            public string Estado { get; set; }
-            public string Region { get; set; }
-            public string Codigo { get; set; }
-            public string Ciudad { get; set; }
+            public string? Telefono { get; set; }
+            public string? Municipio { get; set; }
+            public string? Estado { get; set; }
+            public string? Region { get; set; }
+            public string? Codigo { get; set; }
+            public string? Ciudad { get; set; }
             public decimal Tope_diario { get; set; }
             public int? Calibre_id { get; set; }
             public decimal Capacidad_toneladas { get; set; }
-            public string Descripcion { get; set; }
-            public string Tipo { get; set; }
+            public string? Descripcion { get; set; }
+            public string? Tipo { get; set; }
             public int? Grano_id { get; set; }
             public int Sede_id { get; set; }
             // Campos de Productores
@@ -865,7 +865,7 @@ namespace Alazan.API.Controllers
                 {
                     parameters = new {
                         Id = guid,
-                        item.Nombre, item.Requiere_analisis, item.Telefono, item.Municipio,
+                        item.Nombre, item.Requiere_analisis, item.Telefono, item.Telefono2, item.Municipio,
                         item.Estado, item.Region, item.Codigo, item.Ciudad, item.Tope_diario,
                         item.Calibre_id, item.Capacidad_toneladas, item.Descripcion, item.Tipo, item.Grano_id,
                         item.Rfc, item.Correo, item.Tipo_persona, item.Banco_id, item.Cuenta_clabe, item.Atiende
@@ -876,7 +876,7 @@ namespace Alazan.API.Controllers
                     int.TryParse(id, out var intId);
                     parameters = new {
                         Id = intId,
-                        item.Nombre, item.Requiere_analisis, item.Telefono, item.Municipio,
+                        item.Nombre, item.Requiere_analisis, item.Telefono, item.Telefono2, item.Municipio,
                         item.Estado, item.Region, item.Codigo, item.Ciudad, item.Tope_diario,
                         item.Calibre_id, item.Capacidad_toneladas, item.Descripcion, item.Tipo, item.Grano_id,
                         item.Rfc, item.Correo, item.Tipo_persona, item.Banco_id, item.Cuenta_clabe, item.Atiende

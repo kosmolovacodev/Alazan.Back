@@ -35,6 +35,7 @@ namespace Alazan.API.Models
         public bool AutorizacionAutomatica { get; set; } = false;
         // CG = precio default/sugerido, CC = precio superior (requiere justificación), NORMAL = precio inferior
         public string? TipoAutorizacion { get; set; }
+        public decimal? DescuentoKg { get; set; }
     }
 
     // DTO para renegociar un precio
