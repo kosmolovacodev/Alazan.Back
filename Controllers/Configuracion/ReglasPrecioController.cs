@@ -128,9 +128,10 @@ namespace Alazan.API.Controllers
         public async Task<IActionResult> UpdateCalibre(int id, [FromBody] DescuentoCalibre dc)
         {
             var sql = @"UPDATE dbo.DescuentosCalibre_Catalogo
-                        SET descuento_kg_ton = @descuento_kg_ton
+                        SET descuento_kg_ton = @descuento_kg_ton,
+                            calibre = @Calibre
                         WHERE id = @id AND (@grano_id IS NULL OR grano_id = @grano_id)";
-            await _db.ExecuteAsync(sql, new { dc.descuento_kg_ton, dc.grano_id, id });
+            await _db.ExecuteAsync(sql, new { dc.descuento_kg_ton, dc.Calibre, dc.grano_id, id });
             return Ok(new { message = "Calibre actualizado correctamente" });
         }
 

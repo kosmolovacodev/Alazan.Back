@@ -215,6 +215,7 @@ namespace Alazan.API.Controllers
                     UPDATE dbo.boletas_precio
                     SET precio_autorizado = @PrecioNuevo,
                         precio_final = @PrecioNuevo,
+                        descuento_kg_ton = CASE WHEN @DescuentoKg IS NOT NULL THEN @DescuentoKg ELSE descuento_kg_ton END,
                         estatus = 'Precio Autorizado',
                         tiempo_autorizacion = SYSDATETIMEOFFSET(),
                         usuario_autorizacion = @Usuario,
@@ -224,6 +225,7 @@ namespace Alazan.API.Controllers
                     new
                     {
                         dto.PrecioNuevo,
+                        DescuentoKg = dto.DescuentoKg,
                         Usuario = usuario,
                         MotivoRenegociacion = dto.MotivoRenegociacion ?? "",
                         dto.BoletaPrecioId

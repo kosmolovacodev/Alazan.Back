@@ -44,6 +44,7 @@ namespace Alazan.API.Models
         public decimal PrecioNuevo { get; set; }
         public string MotivoRenegociacion { get; set; } = string.Empty;
         public string? Observaciones { get; set; }
+        public decimal? DescuentoKg { get; set; }
     }
 
     // DTO para rechazar un precio
