@@ -234,13 +234,18 @@ namespace Alazan.API.Controllers
                     dto.BoletaId
                 });
 
-                // Sincronizar estatus en boletas_precio
-                await _db.ExecuteAsync(@"
-                    UPDATE dbo.boletas_precio
-                    SET estatus = @NuevoEstatus,
-                        fecha_modificacion = SYSDATETIMEOFFSET()
-                    WHERE boleta_id = @BoletaId",
-                    new { NuevoEstatus = nuevoEstatus, dto.BoletaId });
+                // Sincronizar estatus en boletas_precio solo cuando el productor RECHAZA
+                // (para que quede en renegociación y aparezca en PrecioPage).
+                // Cuando acepta, boletas_precio permanece en "Precio Autorizado".
+                if (!dto.Acepta)
+                {
+                    await _db.ExecuteAsync(@"
+                        UPDATE dbo.boletas_precio
+                        SET estatus = @NuevoEstatus,
+                            fecha_modificacion = SYSDATETIMEOFFSET()
+                        WHERE boleta_id = @BoletaId",
+                        new { NuevoEstatus = nuevoEstatus, dto.BoletaId });
+                }
 
                 // Actualizar el estatus en bascula_recepciones
                 await _db.ExecuteAsync(@"
