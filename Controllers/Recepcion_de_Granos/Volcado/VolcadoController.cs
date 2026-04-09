@@ -239,7 +239,7 @@ namespace Alazan.API.Controllers
                 var boleta = await _db.QueryFirstOrDefaultAsync<dynamic>(@"
                     SELECT
                         b.bascula_id,
-                        b.peso_neto,
+                        b.peso_bruto,
                         b.ticket_numero,
                         b.calibre,
                         b.humedad,
@@ -366,11 +366,104 @@ namespace Alazan.API.Controllers
                 await _db.ExecuteAsync(@"UPDATE dbo.boletas SET status = 'Precio Aceptado', updated_at = SYSDATETIMEOFFSET() WHERE id = @BoletaId", new { dto.BoletaId });
                 await _db.ExecuteAsync(@"UPDATE dbo.bascula_recepciones SET status = 'VOLCADO', updated_at = GETDATE() WHERE id = @BasculaId", new { BasculaId = (int)boleta.bascula_id });
 
+                // Registrar / actualizar inventario de silos
+                var volcadoId = await _db.QueryFirstAsync<long>(@"
+                    SELECT id FROM dbo.volcado_bodega WHERE bascula_id = @BasculaId",
+                    new { BasculaId = (int)boleta.bascula_id });
+
+                await _db.ExecuteAsync(@"
+                    MERGE dbo.inventario_silos AS t
+                    USING (SELECT @BasculaId AS bascula_id) AS s ON t.bascula_id = s.bascula_id
+                    WHEN MATCHED THEN UPDATE SET
+                        volcado_id    = @VolcadoId,
+                        bodega_id     = @BodegaId,
+                        bodega_nombre = @BodegaNombre,
+                        silo_numero   = @SiloNumero,
+                        ticket_numero = @Ticket,
+                        kg_bruto      = @KgBruto,
+                        calibre       = @Calibre,
+                        grano_id      = @GranoId,
+                        updated_at    = SYSDATETIMEOFFSET()
+                    WHEN NOT MATCHED THEN INSERT (
+                        volcado_id, bascula_id, bodega_id, bodega_nombre, silo_numero,
+                        ticket_numero, kg_bruto, kg_neto, calibre, grano_id, status, sede_id,
+                        fecha_ingreso, created_at, updated_at
+                    ) VALUES (
+                        @VolcadoId, @BasculaId, @BodegaId, @BodegaNombre, @SiloNumero,
+                        @Ticket, @KgBruto, 0, @Calibre, @GranoId, 'SinOC', @SedeId,
+                        SYSDATETIMEOFFSET(), SYSDATETIMEOFFSET(), SYSDATETIMEOFFSET()
+                    );",
+                    new {
+                        VolcadoId    = volcadoId,
+                        BasculaId    = (int)boleta.bascula_id,
+                        BodegaId     = bodegaId,
+                        BodegaNombre = siloNombre,
+                        SiloNumero   = siloNumero,
+                        Ticket       = boleta.ticket_numero,
+                        KgBruto      = (decimal?)boleta.peso_bruto ?? 0m,
+                        Calibre      = boleta.calibre,
+                        GranoId      = boleta.grano_id,
+                        SedeId       = sedeId
+                    });
+
                 return Ok(new { message = "Silo asignado y datos de boleta sincronizados" });
             }
             catch (Exception ex)
             {
                 return StatusCode(500, new { message = "Error al asignar silo", error = ex.Message });
+            }
+        }
+
+        // GET: api/volcado/inventario?sedeId=1
+        [HttpGet("inventario")]
+        public async Task<IActionResult> GetInventario([FromQuery] int sedeId)
+        {
+            try
+            {
+                // Resumen agrupado por silo
+                var resumen = await _db.QueryAsync(@"
+                    SELECT
+                        bodega_id      AS bodegaId,
+                        bodega_nombre  AS siloNombre,
+                        silo_numero    AS siloNumero,
+                        calibre,
+                        grano_id       AS granoId,
+                        COUNT(*)                                                       AS totalRegistros,
+                        CAST(SUM(kg) / 1000.0 AS DECIMAL(10,3))                       AS totalToneladas,
+                        CAST(SUM(CASE WHEN status = 'SinOC' THEN kg ELSE 0 END) / 1000.0 AS DECIMAL(10,3)) AS toneladasSinOC,
+                        CAST(SUM(CASE WHEN status = 'ConOC' THEN kg ELSE 0 END) / 1000.0 AS DECIMAL(10,3)) AS toneladasConOC
+                    FROM dbo.inventario_silos
+                    WHERE sede_id = @sedeId
+                    GROUP BY bodega_id, bodega_nombre, silo_numero, calibre, grano_id
+                    ORDER BY bodega_nombre, calibre",
+                    new { sedeId });
+
+                // Detalle de cada registro
+                var detalle = await _db.QueryAsync(@"
+                    SELECT
+                        i.id,
+                        i.ticket_numero    AS ticket,
+                        i.bodega_nombre    AS siloNombre,
+                        i.silo_numero      AS siloNumero,
+                        i.calibre,
+                        i.kg,
+                        i.toneladas,
+                        i.status,
+                        i.fecha_ingreso    AS fechaIngreso,
+                        b.productor,
+                        g.nombre           AS tipoGrano
+                    FROM dbo.inventario_silos i
+                    LEFT JOIN dbo.boletas b        ON b.ticket_numero = i.ticket_numero AND b.sede_id = i.sede_id
+                    LEFT JOIN dbo.granos_catalogo g ON g.id = i.grano_id
+                    WHERE i.sede_id = @sedeId
+                    ORDER BY i.fecha_ingreso DESC",
+                    new { sedeId });
+
+                return Ok(new { resumen, detalle });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { message = "Error al obtener inventario", error = ex.Message });
             }
         }
 

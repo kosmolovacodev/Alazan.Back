@@ -136,6 +136,8 @@ namespace Alazan.API.Controllers
             // MBA3 - Notas y metadata
             public string? Memo { get; set; }
             public DateTime? Fecha_creacion_erp { get; set; }
+            // Origen del registro: 'mba3' | 'registro'
+            public string? Origen { get; set; }
         }
         public class GenericUpdate { public bool Activo { get; set; } }
 
@@ -244,7 +246,7 @@ namespace Alazan.API.Controllers
                               p.cuenta_bancaria2, p.aba_swift, p.beneficiario,
                               p.codigo_transferencia, p.codigo_transaccion,
                               p.definible_transferencia1, p.definible_transferencia2, p.definible_transferencia3,
-                              p.memo, p.fecha_creacion_erp
+                              p.memo, p.fecha_creacion_erp, p.origen
                           FROM dbo.productores p
                           LEFT JOIN dbo.bancos_catalogo b ON p.banco_id = b.id
                           WHERE {sedeFilter} {searchFilter}
@@ -284,7 +286,7 @@ namespace Alazan.API.Controllers
                                 cuenta_bancaria2, aba_swift, beneficiario,
                                 codigo_transferencia, codigo_transaccion,
                                 definible_transferencia1, definible_transferencia2, definible_transferencia3,
-                                memo, fecha_creacion_erp
+                                memo, fecha_creacion_erp, origen
                             ) VALUES (
                                 @Nombre, @Telefono, @Rfc, @Correo, @Tipo_persona, @Banco_id, @Cuenta_clabe, @Atiende,
                                 1, GETDATE(), GETDATE(), @SedeId,
@@ -301,7 +303,7 @@ namespace Alazan.API.Controllers
                                 @Cuenta_bancaria2, @Aba_swift, @Beneficiario,
                                 @Codigo_transferencia, @Codigo_transaccion,
                                 @Definible_transferencia1, @Definible_transferencia2, @Definible_transferencia3,
-                                @Memo, @Fecha_creacion_erp
+                                @Memo, @Fecha_creacion_erp, @Origen
                             );
                             SELECT CAST(SCOPE_IDENTITY() as int);";
                 var id = await _db.QuerySingleAsync<int>(sql, new {
@@ -322,7 +324,7 @@ namespace Alazan.API.Controllers
                     item.Cuenta_bancaria2, item.Aba_swift, item.Beneficiario,
                     item.Codigo_transferencia, item.Codigo_transaccion,
                     item.Definible_transferencia1, item.Definible_transferencia2, item.Definible_transferencia3,
-                    item.Memo, item.Fecha_creacion_erp
+                    item.Memo, item.Fecha_creacion_erp, item.Origen
                 });
                 return Ok(new { id, nombre = item.Nombre });
             }

@@ -59,6 +59,9 @@ builder.Services.AddOpenApi();
 // 4. SERVICIO EN SEGUNDO PLANO: Auto-autorización de precios por tiempo
 builder.Services.AddHostedService<AutoAutorizacionPrecioService>();
 
+// 5. SERVICIO EN SEGUNDO PLANO: Snapshot diario de inventario por silo (00:05)
+builder.Services.AddHostedService<SnapshotInventarioService>();
+
 var app = builder.Build();
 
 // --- COMPATIBILIDAD CON SUB-APLICACIÓN IIS ---

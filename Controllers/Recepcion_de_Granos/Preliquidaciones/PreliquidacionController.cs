@@ -265,7 +265,15 @@ namespace Alazan.API.Controllers
 
                 await _db.ExecuteAsync(sqlBascula, dto);
 
-                // 3. Crear registros en facturacion_recepciones
+                // 3a. Actualizar kg_neto en inventario_silos con el peso real (bruto - tara)
+                await _db.ExecuteAsync(@"
+                    UPDATE dbo.inventario_silos
+                    SET kg_neto   = @PesoNeto,
+                        updated_at = SYSDATETIMEOFFSET()
+                    WHERE bascula_id = (SELECT bascula_id FROM dbo.boletas WHERE id = @BoletaId)",
+                    new { dto.PesoNeto, dto.BoletaId });
+
+                // 4. Crear registros en facturacion_recepciones
                 if (dto.Divisiones != null && dto.Divisiones.Count > 1)
                 {
                     // Obtener el id de la preliquidación recién creada

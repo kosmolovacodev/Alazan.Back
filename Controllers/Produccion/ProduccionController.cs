@@ -43,7 +43,8 @@ namespace Alazan.API.Controllers
                 new { sedeId });
 
             var calibres = await _db.QueryAsync(
-                "SELECT id, calibre_mm, calibre_mm AS nombre, grano_id AS granoId FROM dbo.calibres_catalogo WHERE activo = 1 ORDER BY calibre_mm");
+                "SELECT id, calibre_mm, calibre_mm AS nombre, grano_id AS granoId FROM dbo.calibres_catalogo WHERE activo = 1 AND sede_id = @sedeId ORDER BY calibre_mm",
+                new { sedeId });
 
             return Ok(new { trenes, tipoProceso, presentacion, bloqueInsumos, subproductos, desechos, silos, bodegas, calibres });
         }
