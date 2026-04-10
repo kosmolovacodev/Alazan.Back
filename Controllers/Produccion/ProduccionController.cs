@@ -35,7 +35,9 @@ namespace Alazan.API.Controllers
                 "SELECT id, nombre FROM dbo.cat_desecho_produccion WHERE activo = 1 ORDER BY nombre");
 
             var silos = await _db.QueryAsync(
-                "SELECT id, nombre FROM dbo.silos_calibre_catalogo WHERE sede_id = @sedeId AND activo = 1 ORDER BY CAST(nombre AS NVARCHAR(4000))",
+                @"SELECT id, nombre FROM dbo.silos_calibre_catalogo
+                  WHERE activo = 1 AND sede_id = @sedeId
+                  ORDER BY CAST(nombre AS NVARCHAR(4000))",
                 new { sedeId });
 
             var bodegas = await _db.QueryAsync(
@@ -46,7 +48,32 @@ namespace Alazan.API.Controllers
                 "SELECT id, calibre_mm, calibre_mm AS nombre, grano_id AS granoId FROM dbo.calibres_catalogo WHERE activo = 1 AND sede_id = @sedeId ORDER BY calibre_mm",
                 new { sedeId });
 
-            return Ok(new { trenes, tipoProceso, presentacion, bloqueInsumos, subproductos, desechos, silos, bodegas, calibres });
+            // Calibres por tipo de mercado para el selector del encabezado de orden
+            var calibreOzAm = await _db.QueryAsync(
+                @"SELECT c.id, c.calibre_mm AS nombre FROM dbo.calibres_catalogo c
+                  JOIN dbo.granos_catalogo g ON g.id = c.grano_id
+                  WHERE g.nombre = 'Garbanzo' AND c.clasificacion = 'OZ AM'
+                    AND c.activo = 1 AND c.sede_id = @sedeId ORDER BY c.id",
+                new { sedeId });
+
+            var calibreOzEsp = await _db.QueryAsync(
+                @"SELECT c.id, c.calibre_mm AS nombre FROM dbo.calibres_catalogo c
+                  JOIN dbo.granos_catalogo g ON g.id = c.grano_id
+                  WHERE g.nombre = 'Garbanzo' AND c.clasificacion = 'OZ ESP'
+                    AND c.activo = 1 AND c.sede_id = @sedeId ORDER BY c.id",
+                new { sedeId });
+
+            var calibreFrijol = await _db.QueryAsync(
+                @"SELECT c.id, c.calibre_mm AS nombre FROM dbo.calibres_catalogo c
+                  JOIN dbo.granos_catalogo g ON g.id = c.grano_id
+                  WHERE g.nombre = 'Frijol'
+                    AND c.activo = 1 AND c.sede_id = @sedeId ORDER BY c.id",
+                new { sedeId });
+
+            var calibresAnalisis = await _db.QueryAsync(
+                "SELECT id, nombre FROM dbo.cat_calibres_analisis_produccion WHERE activo = 1 ORDER BY CASE WHEN nombre LIKE '%-%' THEN 1 ELSE 0 END, LEN(nombre), nombre");
+
+            return Ok(new { trenes, tipoProceso, presentacion, bloqueInsumos, subproductos, desechos, silos, bodegas, calibres, calibreOzAm, calibreOzEsp, calibreFrijol, calibresAnalisis });
         }
 
         // ─── ÓRDENES DE PRODUCCIÓN ──────────────────────────────────────
@@ -56,22 +83,25 @@ namespace Alazan.API.Controllers
             var ordenes = await _db.QueryAsync(
                 @"SELECT
                     o.id,
-                    o.no_orden AS noOrden,
-                    o.fecha_orden AS fechaOrden,
+                    o.no_orden        AS noOrden,
+                    o.fecha_orden     AS fechaOrden,
                     o.status,
-                    o.fecha_creacion AS fechaCreacion,
-                    -- KG total de resultado (suma kg clasificados de todos los trenes)
+                    o.calibre_tipo    AS calibreTipo,
+                    o.fecha_creacion  AS fechaCreacion,
+                    -- Número de trenes
+                    (SELECT COUNT(*) FROM dbo.produccion_trenes t WHERE t.orden_id = o.id) AS numTrenes,
+                    -- KG total del resultado
                     ISNULL((
                         SELECT SUM(
-                            ISNULL(JSON_VALUE(tr.value, '$.sacos25') * 25, 0) +
-                            ISNULL(JSON_VALUE(tr.value, '$.sacos50') * 50, 0) +
+                            ISNULL(JSON_VALUE(tr.value, '$.sacos25')  * 25, 0) +
+                            ISNULL(JSON_VALUE(tr.value, '$.sacos50')  * 50, 0) +
                             ISNULL(CAST(JSON_VALUE(tr.value, '$.polibolsa') AS DECIMAL(12,2)), 0)
                         )
                         FROM dbo.resultado_produccion rp
                         CROSS APPLY OPENJSON(rp.producto_clasificado) tr
                         WHERE rp.orden_id = o.id
                     ), 0) AS kg,
-                    -- Producto (primer tren de la orden)
+                    -- Producto (primer tren)
                     (SELECT TOP 1 t.producto FROM dbo.produccion_trenes t WHERE t.orden_id = o.id) AS producto
                 FROM dbo.ordenesproduccion o
                 WHERE o.sede_id = @sedeId
@@ -86,6 +116,7 @@ namespace Alazan.API.Controllers
         {
             var orden = await _db.QueryFirstOrDefaultAsync(
                 @"SELECT id, no_orden AS noOrden, sede_id AS sedeId, fecha_orden AS fechaOrden,
+                         calibre_tipo AS calibreTipo,
                          status, justificacion_edicion AS justificacionEdicion,
                          fecha_creacion AS fechaCreacion
                   FROM dbo.ordenesproduccion WHERE id = @id",
@@ -133,10 +164,10 @@ namespace Alazan.API.Controllers
                 using var trans = _db.BeginTransaction();
 
                 var ordenId = await _db.QuerySingleAsync<int>(
-                    @"INSERT INTO dbo.ordenesproduccion (no_orden, sede_id, fecha_orden)
-                      VALUES (@NoOrden, @SedeId, @FechaOrden);
+                    @"INSERT INTO dbo.ordenesproduccion (no_orden, sede_id, fecha_orden, calibre_tipo)
+                      VALUES (@NoOrden, @SedeId, @FechaOrden, @CalibreTipo);
                       SELECT CAST(SCOPE_IDENTITY() AS INT);",
-                    new { NoOrden = dto.NoOrden, SedeId = sedeId, FechaOrden = dto.FechaOrden },
+                    new { NoOrden = dto.NoOrden, SedeId = sedeId, FechaOrden = dto.FechaOrden, CalibreTipo = dto.CalibreTipo },
                     transaction: trans);
 
                 foreach (var tren in dto.Trenes)
@@ -188,10 +219,11 @@ namespace Alazan.API.Controllers
                 await _db.ExecuteAsync(
                     @"UPDATE dbo.ordenesproduccion
                       SET no_orden = @NoOrden, fecha_orden = @FechaOrden,
+                          calibre_tipo = @CalibreTipo,
                           justificacion_edicion = @Justificacion,
                           fecha_actualizacion = SYSDATETIMEOFFSET()
                       WHERE id = @Id",
-                    new { NoOrden = dto.NoOrden, FechaOrden = dto.FechaOrden, Justificacion = dto.JustificacionEdicion, Id = id },
+                    new { NoOrden = dto.NoOrden, FechaOrden = dto.FechaOrden, CalibreTipo = dto.CalibreTipo, Justificacion = dto.JustificacionEdicion, Id = id },
                     transaction: trans);
 
                 await _db.ExecuteAsync("DELETE FROM dbo.produccion_trenes WHERE orden_id = @Id", new { Id = id }, transaction: trans);
@@ -307,14 +339,11 @@ namespace Alazan.API.Controllers
         {
             var lista = await _db.QueryAsync(
                 @"SELECT acp.id, acp.no_orden AS noOrden, acp.fecha, acp.envasado, acp.producto,
-                         acp.cosecha, acp.proceso, acp.silo, acp.variedad,
+                         acp.cosecha, acp.proceso, acp.silo,
+                         ISNULL(acp.finalizado, 0) AS finalizado,
                          acp.fecha_registro AS fechaRegistro
                   FROM dbo.analisiscalidad_proceso acp
-                  LEFT JOIN dbo.ordenesproduccion op
-                         ON op.no_orden = acp.no_orden AND op.sede_id = acp.sede_id
                   WHERE acp.sede_id = @sedeId
-                    AND ISNULL(acp.finalizado, 0) = 0
-                    AND ISNULL(op.status, 'Pendiente') <> 'Resultado Registrado'
                   ORDER BY acp.fecha_registro DESC",
                 new { sedeId });
             return Ok(lista);
@@ -343,7 +372,8 @@ namespace Alazan.API.Controllers
         {
             var row = await _db.QueryFirstOrDefaultAsync(
                 @"SELECT id, sede_id AS sedeId, no_orden AS noOrden, fecha, envasado, producto,
-                         grano_id AS granoId, cosecha, proceso, silo, variedad,
+                         grano_id AS granoId, cosecha, proceso, silo,
+                         ISNULL(finalizado, 0) AS finalizado,
                          detallado, parrillas, fecha_registro AS fechaRegistro
                   FROM dbo.analisiscalidad_proceso WHERE id = @id",
                 new { id });
@@ -384,6 +414,7 @@ namespace Alazan.API.Controllers
                 await _db.ExecuteAsync(
                     @"UPDATE dbo.analisiscalidad_proceso
                       SET detallado = @Detallado, parrillas = @Parrillas,
+                          finalizado = 1,
                           fecha_actualizacion = SYSDATETIMEOFFSET()
                       WHERE id = @Id",
                     new { dto.Detallado, dto.Parrillas, Id = id });
@@ -401,6 +432,7 @@ namespace Alazan.API.Controllers
         {
             public string NoOrden { get; set; } = "";
             public string FechaOrden { get; set; } = "";
+            public string? CalibreTipo { get; set; }
             public string? JustificacionEdicion { get; set; }
             public List<TrenRequest> Trenes { get; set; } = new();
         }
