@@ -31,14 +31,18 @@ namespace Alazan.API.Controllers
             {
                 // 1. Buscamos el usuario por Email incluyendo el hash de la contraseña
                 var sql = @"
-                    SELECT 
-                        au.id, 
-                        au.email, 
-                        au.encrypted_password, 
-                        u.nombre_completo, 
+                    SELECT
+                        au.id,
+                        au.email,
+                        au.encrypted_password,
+                        u.id              AS usuario_id,
+                        u.nombre_completo,
                         u.activo,
-                        r.nombre_rol, 
+                        u.departamento,
+                        r.nombre_rol,
                         r.permisos_json,
+                        r.seccion_inicio_dia,
+                        r.tipo_inicio_dia,
                         u.sede_id
                     FROM auth.users au
                     INNER JOIN dbo.usuarios u ON au.id = u.auth_user_id
@@ -69,11 +73,15 @@ namespace Alazan.API.Controllers
                 // 6. Respuesta al Front (incluye el token y datos del usuario)
                 var userResponse = new {
                     id = user.id,
+                    usuario_id = user.usuario_id,
                     email = user.email,
                     nombre_completo = user.nombre_completo,
                     nombre_rol = user.nombre_rol,
                     permisos_json = user.permisos_json,
-                    sede_id = user.sede_id
+                    sede_id = user.sede_id,
+                    departamento = user.departamento,
+                    seccion_inicio_dia = user.seccion_inicio_dia,
+                    tipo_inicio_dia    = user.tipo_inicio_dia
                 };
 
                 return Ok(new { 

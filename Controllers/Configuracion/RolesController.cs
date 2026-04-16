@@ -17,7 +17,8 @@ public class RolesController : ControllerBase
         {
             // Admin global (sedeId=0) ve todos los roles
             // Usuarios normales ven: roles de su sede + roles globales (sede_id=0 o NULL)
-            var sql = @"SELECT id, nombre_rol, descripcion, permisos_json, activo
+            var sql = @"SELECT id, nombre_rol, descripcion, permisos_json, activo,
+                               seccion_inicio_dia, tipo_inicio_dia
                         FROM dbo.roles
                         WHERE @sedeId = 0 OR sede_id = @sedeId OR sede_id = 0 OR sede_id IS NULL";
             return Ok(await _db.QueryAsync(sql, new { sedeId }));
@@ -47,12 +48,14 @@ public class RolesController : ControllerBase
                     }
                     // -------------------------
 
-                    string desc = el.TryGetProperty("descripcion", out var descElem) ? descElem.GetString() ?? "" : "";
+                    string desc      = el.TryGetProperty("descripcion",       out var descElem) ? descElem.GetString() ?? "" : "";
+                    string? seccion  = el.TryGetProperty("seccion_inicio_dia", out var secElem)  ? secElem.GetString()  : null;
+                    string? tipo     = el.TryGetProperty("tipo_inicio_dia",    out var tipoElem) ? tipoElem.GetString() : null;
 
-                    var sql = @"INSERT INTO dbo.roles (nombre_rol, descripcion, activo, created_at, sede_id)
-                                VALUES (@nombre, @desc, 1, SYSDATETIMEOFFSET(), @sedeId)";
+                    var sql = @"INSERT INTO dbo.roles (nombre_rol, descripcion, activo, created_at, sede_id, seccion_inicio_dia, tipo_inicio_dia)
+                                VALUES (@nombre, @desc, 1, SYSDATETIMEOFFSET(), @sedeId, @seccion, @tipo)";
 
-                    await _db.ExecuteAsync(sql, new { nombre, desc, sedeId });
+                    await _db.ExecuteAsync(sql, new { nombre, desc, sedeId, seccion, tipo });
 
                     return Ok(new { message = "Rol creado" });
                 }
@@ -70,16 +73,20 @@ public class RolesController : ControllerBase
                 try 
                 {
                     // Actualizamos tanto el nombre como la descripción
-                    var sql = @"UPDATE dbo.roles 
-                                SET nombre_rol = @nombre_rol, 
-                                    descripcion = @descripcion, 
-                                    updated_at = SYSDATETIMEOFFSET() 
+                    var sql = @"UPDATE dbo.roles
+                                SET nombre_rol = @nombre_rol,
+                                    descripcion = @descripcion,
+                                    seccion_inicio_dia = @seccion_inicio_dia,
+                                    tipo_inicio_dia    = @tipo_inicio_dia,
+                                    updated_at = SYSDATETIMEOFFSET()
                                 WHERE id = @id";
-                    
-                    await _db.ExecuteAsync(sql, new { 
+
+                    await _db.ExecuteAsync(sql, new {
                         nombre_rol = r.Nombre_rol,
                         descripcion = r.Descripcion,
-                        id 
+                        seccion_inicio_dia = r.Seccion_inicio_dia,
+                        tipo_inicio_dia    = r.Tipo_inicio_dia,
+                        id
                     });
                     
                     return Ok();
@@ -91,9 +98,12 @@ public class RolesController : ControllerBase
             }
 
             // Clase de apoyo para recibir los datos correctamente
+            // Nombres con underscore para coincidir con snake_case del JSON del frontend
             public class RolUpdateRequest {
                 public string Nombre_rol { get; set; }
                 public string Descripcion { get; set; }
+                public string? Seccion_inicio_dia { get; set; }
+                public string? Tipo_inicio_dia { get; set; }
             }
 
         [HttpDelete("{id}")]

@@ -20,17 +20,15 @@ namespace Alazan.API.Controllers
             // Lógica: Si sedeId es 0 (Admin Global), trae todos. 
             // Si es > 0, filtra estrictamente por esa sede.
             var sql = @"
-                SELECT 
-                    u.*, 
-                    u.nombre_completo AS nombre, 
-                    u.email AS username,
-                    r.nombre_rol,
-                    u.sede_id
+                SELECT
+                    u.*,
+                    u.nombre_completo AS nombre,
+                    u.email          AS username,
+                    r.nombre_rol
                 FROM dbo.usuarios u
-                INNER JOIN auth.users a ON u.auth_user_id = a.id
                 INNER JOIN dbo.roles r ON u.rol_id = r.id
-                LEFT JOIN dbo.sedes_catalogo s ON u.sede_id = s.id
-                WHERE (@sedeId = 0 OR u.sede_id = @sedeId)";
+                WHERE (@sedeId = 0 OR u.sede_id = @sedeId OR u.sede_id = 0)
+                ORDER BY u.nombre_completo";
                 
             var data = await _db.QueryAsync(sql, new { sedeId });
             return Ok(data);

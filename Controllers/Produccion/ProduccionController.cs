@@ -339,7 +339,7 @@ namespace Alazan.API.Controllers
         {
             var lista = await _db.QueryAsync(
                 @"SELECT acp.id, acp.no_orden AS noOrden, acp.fecha, acp.envasado, acp.producto,
-                         acp.cosecha, acp.proceso, acp.silo,
+                         acp.cosecha, acp.proceso, acp.silo, acp.variedad,
                          ISNULL(acp.finalizado, 0) AS finalizado,
                          acp.fecha_registro AS fechaRegistro
                   FROM dbo.analisiscalidad_proceso acp
