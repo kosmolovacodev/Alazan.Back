@@ -241,6 +241,7 @@ namespace Alazan.API.Controllers
                     await _db.ExecuteAsync(@"
                         UPDATE dbo.boletas
                         SET precio_mxn = @PrecioNuevo,
+                            descuento_kg_ton = CASE WHEN @DescuentoKg IS NOT NULL THEN @DescuentoKg ELSE descuento_kg_ton END,
                             status = 'Precio Autorizado',
                             observaciones = ISNULL(observaciones, '') + ' | Renegociado: ' + @MotivoRenegociacion,
                             updated_at = SYSDATETIMEOFFSET()
@@ -248,6 +249,7 @@ namespace Alazan.API.Controllers
                         new
                         {
                             dto.PrecioNuevo,
+                            DescuentoKg = dto.DescuentoKg,
                             MotivoRenegociacion = dto.MotivoRenegociacion ?? "",
                             BoletaId = (int)boletaPrecio.boleta_id
                         });

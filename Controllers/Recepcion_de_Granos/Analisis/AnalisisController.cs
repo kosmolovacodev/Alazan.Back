@@ -97,6 +97,7 @@ namespace Alazan.API.Controllers
                         b.ticket_numero,
                         b.peso_bruto_kg,
                         b.tara_kg,
+                        b.ton_aprox,
                         b.placas,
                         b.chofer,
                         CASE
@@ -123,7 +124,9 @@ namespace Alazan.API.Controllers
                     decimal pesoBruto = datosBascula.peso_bruto_kg ?? 0;
                     decimal tara = datosBascula.tara_kg ?? 0;
                     decimal pesoNeto = pesoBruto - tara;
-                    decimal toneladas = pesoNeto / 1000m;
+                    // Usar ton_aprox declarado por el productor; si no existe, calcular de báscula
+                    decimal tonAproxDeclarado = (decimal?)datosBascula.ton_aprox ?? 0m;
+                    decimal toneladas = tonAproxDeclarado > 0 ? tonAproxDeclarado : pesoNeto / 1000m;
 
                     // Obtener comprador desde configuración del sistema
                     var comprador = await _db.QueryFirstOrDefaultAsync<string>(

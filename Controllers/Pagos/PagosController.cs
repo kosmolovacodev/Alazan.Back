@@ -64,11 +64,13 @@ namespace Alazan.API.Controllers
                 var sql = @"
                     SELECT * FROM Configuracion_Pagos_General  WHERE sede_id = @sedeId;
                     SELECT * FROM Configuracion_Pagos_Status   WHERE sede_id = @sedeId AND activo = 1 ORDER BY orden;
-                    SELECT * FROM Configuracion_Pagos_Formas   WHERE sede_id = @sedeId AND activo = 1;
+                    SELECT * FROM Configuracion_Pagos_Formas
+                    WHERE activo = 1 AND (@sedeId = 0 OR sede_id = @sedeId)
+                    ORDER BY id;
                     SELECT * FROM Configuracion_Pagos_Dias     WHERE sede_id = @sedeId;
                     SELECT id, nombre_banco, codigo_banco
                     FROM bancos_catalogo
-                    WHERE activo = 1 AND (sede_id = @sedeId OR sede_id IS NULL)
+                    WHERE activo = 1 AND (@sedeId = 0 OR sede_id = @sedeId OR sede_id IS NULL)
                     ORDER BY nombre_banco;";
 
                 using var multi = await _db.QueryMultipleAsync(sql, new { sedeId });
@@ -178,7 +180,11 @@ namespace Alazan.API.Controllers
                     SELECT
                         sp.id,
                         sp.facturacion_id,
-                        sp.monto_solicitado,
+                        -- Monto real: del XML guardado (importe - predial - ISR) o fallback * 0.987
+                        ISNULL(
+                            TRY_CAST(JSON_VALUE(fr.datos_adicionales, '$.xml.aPagar') AS DECIMAL(18,2)),
+                            CAST(ISNULL(fr.importe_factura, fr.monto_total) * 0.987 AS DECIMAL(18,2))
+                        )                                           AS monto_solicitado,
                         sp.status                                   AS status_pago,
                         FORMAT(sp.fecha_solicitud,   'dd/MM/yyyy')  AS fecha_solicitud,
                         FORMAT(sp.fecha_autorizacion,'dd/MM/yyyy')  AS fecha_autorizacion,
@@ -189,6 +195,7 @@ namespace Alazan.API.Controllers
                         sp.metodo_pago,
                         cpf.nombre                                  AS nombre_forma_pago,
                         sp.cuenta_clabe,
+                        sp.cuenta_origen,
                         -- Ticket y entrega
                         b.ticket_numero                             AS ticket,
                         FORMAT(fr.fecha_recepcion, 'dd/MM/yyyy')    AS fecha_entrega,
@@ -235,7 +242,10 @@ namespace Alazan.API.Controllers
                     SELECT
                         sp.id,
                         sp.facturacion_id,
-                        sp.monto_solicitado,
+                        ISNULL(
+                            TRY_CAST(JSON_VALUE(fr.datos_adicionales, '$.xml.aPagar') AS DECIMAL(18,2)),
+                            CAST(ISNULL(fr.importe_factura, fr.monto_total) * 0.987 AS DECIMAL(18,2))
+                        )                                           AS monto_solicitado,
                         sp.status                                   AS status_pago,
                         FORMAT(sp.fecha_solicitud,   'dd/MM/yyyy')  AS fecha_solicitud,
                         FORMAT(sp.fecha_autorizacion,'dd/MM/yyyy')  AS fecha_autorizacion,
@@ -246,6 +256,7 @@ namespace Alazan.API.Controllers
                         sp.metodo_pago,
                         cpf.nombre                                  AS nombre_forma_pago,
                         sp.cuenta_clabe,
+                        sp.cuenta_origen,
                         b.ticket_numero                             AS ticket,
                         FORMAT(fr.fecha_recepcion, 'dd/MM/yyyy')    AS fecha_entrega,
                         fr.rfc_productor,
@@ -378,13 +389,23 @@ namespace Alazan.API.Controllers
                     });
                 }
 
+                // ── Validar documentos obligatorios ─────────────────────────
+                var sinDocumentos = await _db.ExecuteScalarAsync<int>(@"
+                    SELECT COUNT(*) FROM solicitudes_pago sp
+                    INNER JOIN facturacion_recepciones fr ON sp.facturacion_id = fr.id
+                    WHERE sp.id IN @Ids
+                      AND (ISNULL(fr.tiene_documentos, 0) = 0 OR ISNULL(fr.tiene_factura_xml, 0) = 0)",
+                    new { Ids = dto.SolicitudIds });
+
+                if (sinDocumentos > 0)
+                    return BadRequest(new { message = "Una o más facturas ya no tienen los documentos obligatorios. No se puede solicitar el pago." });
+
                 // ── Cambiar status ───────────────────────────────────────────
                 var sql = @"
                     UPDATE solicitudes_pago
-                    SET status               = 'PAGO SOLICITADO',
-                        fecha_solicitud      = GETDATE(),
-                        usuario_solicitud_id = @UserId,
-                        updated_at           = GETDATE()
+                    SET status      = 'PAGO SOLICITADO',
+                        fecha_solicitud = GETDATE(),
+                        updated_at   = GETDATE()
                     WHERE id    IN @Ids
                       AND status = 'SOLICITAR';";
 
@@ -418,10 +439,10 @@ namespace Alazan.API.Controllers
 
                 var sql = @"
                     UPDATE solicitudes_pago
-                    SET status                  = 'AUTORIZADO',
-                        fecha_autorizacion      = @FechaAutorizacion,
-                        usuario_autorizacion_id = @UserId,
-                        updated_at              = GETDATE()
+                    SET status                 = 'AUTORIZADO',
+                        fecha_autorizacion     = @FechaAutorizacion,
+                        aprobado_por_usuario_id = @UserId,
+                        updated_at             = GETDATE()
                     WHERE id    IN @Ids
                       AND status = 'PAGO SOLICITADO';";
 
@@ -451,6 +472,17 @@ namespace Alazan.API.Controllers
             {
                 var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
 
+                // Validar documentos obligatorios
+                var sinDocumentos = await _db.ExecuteScalarAsync<int>(@"
+                    SELECT COUNT(*) FROM solicitudes_pago sp
+                    INNER JOIN facturacion_recepciones fr ON sp.facturacion_id = fr.id
+                    WHERE sp.id = @SolicitudId
+                      AND (ISNULL(fr.tiene_documentos, 0) = 0 OR ISNULL(fr.tiene_factura_xml, 0) = 0)",
+                    new { dto.SolicitudId });
+
+                if (sinDocumentos > 0)
+                    return BadRequest(new { message = "La factura ya no tiene los documentos obligatorios. No se puede registrar el pago." });
+
                 var sql = @"
                     UPDATE solicitudes_pago
                     SET status           = 'PAGADO',
@@ -458,10 +490,10 @@ namespace Alazan.API.Controllers
                         folio_pago       = @FolioPago,
                         banco_id         = ISNULL(@BancoId,     banco_id),
                         metodo_pago      = ISNULL(@FormaPagoId, metodo_pago),
+                        cuenta_origen    = ISNULL(@CuentaOrigen, cuenta_origen),
                         monto_solicitado = CASE WHEN @ImportePago > 0
                                                THEN @ImportePago
                                                ELSE monto_solicitado END,
-                        usuario_pago_id  = @UserId,
                         updated_at       = GETDATE()
                     WHERE id     = @SolicitudId
                       AND status = 'AUTORIZADO';";
@@ -474,6 +506,7 @@ namespace Alazan.API.Controllers
                     dto.BancoId,
                     dto.FormaPagoId,
                     dto.Cuenta,
+                    dto.CuentaOrigen,
                     dto.ImportePago,
                     UserId = int.TryParse(userId, out var uid) ? uid : (int?)null
                 });

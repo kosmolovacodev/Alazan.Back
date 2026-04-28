@@ -62,7 +62,8 @@ public class ConfiguracionRecepcionController : ControllerBase
                 descripcion AS Descripcion,
                 grano_id AS GranoId,
                 ISNULL(tipo_dato, 'texto') AS TipoDato,
-                ISNULL(afecta_exportacion, 0) AS AfectaExportacion
+                ISNULL(afecta_exportacion, 0) AS AfectaExportacion,
+                opciones AS Opciones
             FROM dbo.Configuracion_Campos_Pantallas
             WHERE sede_id = @sedeId
             ORDER BY pantalla, grano_id, orden",
@@ -179,10 +180,10 @@ public class ConfiguracionRecepcionController : ControllerBase
 
             var sql = @"INSERT INTO dbo.Configuracion_Campos_Pantallas
                         (pantalla, clave_campo, nombre_mostrar, orden, visible,
-                        obligatorio, es_sistema, sede_id, grano_id, tipo_dato, afecta_exportacion)
+                        obligatorio, es_sistema, sede_id, grano_id, tipo_dato, afecta_exportacion, opciones)
                         VALUES
                         (@Pantalla, @ClaveCampo, @NombreMostrar, @Orden, @Visible,
-                        @Obligatorio, @EsSistema, @SedeId, @GranoId, @TipoDato, @AfectaExportacion);
+                        @Obligatorio, @EsSistema, @SedeId, @GranoId, @TipoDato, @AfectaExportacion, @Opciones);
                         SELECT CAST(SCOPE_IDENTITY() as int);";
 
             dto.Id = await _db.QuerySingleAsync<int>(sql, new
@@ -197,7 +198,8 @@ public class ConfiguracionRecepcionController : ControllerBase
                 SedeId = sedeId,
                 dto.GranoId,
                 dto.TipoDato,
-                dto.AfectaExportacion
+                dto.AfectaExportacion,
+                dto.Opciones
             });
             return Ok(dto);
         }
@@ -244,7 +246,8 @@ public class ConfiguracionRecepcionController : ControllerBase
                     obligatorio = CASE WHEN @Obligatorio = 1 THEN 1 ELSE 0 END,
                     nombre_mostrar = @NombreMostrar,
                     tipo_dato = @TipoDato,
-                    afecta_exportacion = CASE WHEN @AfectaExportacion = 1 THEN 1 ELSE 0 END
+                    afecta_exportacion = CASE WHEN @AfectaExportacion = 1 THEN 1 ELSE 0 END,
+                    opciones = @Opciones
                 WHERE id = @Id";
 
             // Ejecutamos el update masivo

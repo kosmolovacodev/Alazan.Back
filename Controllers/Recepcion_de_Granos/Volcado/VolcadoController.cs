@@ -66,9 +66,10 @@ namespace Alazan.API.Controllers
                         COUNT(*) AS totalDelDia,
                         SUM(CASE WHEN v.id IS NOT NULL AND v.bodega_ubicacion IS NOT NULL THEN 1 ELSE 0 END) AS conSiloAsignado,
                         SUM(CASE WHEN v.id IS NULL OR v.bodega_ubicacion IS NULL THEN 1 ELSE 0 END) AS sinSiloAsignado,
-                        CAST(SUM(ISNULL(b.peso_neto, 0)) / 1000.0 AS DECIMAL(10,2)) AS totalToneladas
+                        CAST(SUM(ISNULL(bp.tons_aprox, 0)) AS DECIMAL(10,2)) AS totalToneladas
                     FROM dbo.boletas b
                     LEFT JOIN dbo.volcado_bodega v ON b.bascula_id = v.bascula_id
+                    LEFT JOIN dbo.boletas_precio bp ON b.id = bp.id
                     WHERE (@sedeId = 0 OR b.sede_id = @sedeId)
                       AND b.status IN ('Precio Aceptado', 'Volcado Completado', 'Pre-liquidado')";
 
@@ -245,6 +246,7 @@ namespace Alazan.API.Controllers
                         b.humedad,
                         b.observaciones,
                         b.status,
+                        b.fecha_hora,
                         br.grano_id
                     FROM dbo.boletas b
                     INNER JOIN dbo.bascula_recepciones br ON b.bascula_id = br.id
@@ -391,7 +393,7 @@ namespace Alazan.API.Controllers
                     ) VALUES (
                         @VolcadoId, @BasculaId, @BodegaId, @BodegaNombre, @SiloNumero,
                         @Ticket, @KgBruto, 0, @Calibre, @GranoId, 'SinOC', @SedeId,
-                        SYSDATETIMEOFFSET(), SYSDATETIMEOFFSET(), SYSDATETIMEOFFSET()
+                        @FechaIngreso, SYSDATETIMEOFFSET(), SYSDATETIMEOFFSET()
                     );",
                     new {
                         VolcadoId    = volcadoId,
@@ -403,7 +405,8 @@ namespace Alazan.API.Controllers
                         KgBruto      = (decimal?)boleta.peso_bruto ?? 0m,
                         Calibre      = boleta.calibre,
                         GranoId      = boleta.grano_id,
-                        SedeId       = sedeId
+                        SedeId       = sedeId,
+                        FechaIngreso = boleta.fecha_hora
                     });
 
                 return Ok(new { message = "Silo asignado y datos de boleta sincronizados" });

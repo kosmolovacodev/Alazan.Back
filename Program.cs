@@ -4,6 +4,7 @@ using Alazan.API.Services;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
 using System.Text;
+using QuestPDF.Infrastructure;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -61,6 +62,14 @@ builder.Services.AddHostedService<AutoAutorizacionPrecioService>();
 
 // 5. SERVICIO EN SEGUNDO PLANO: Snapshot diario de inventario por silo (00:05)
 builder.Services.AddHostedService<SnapshotInventarioService>();
+
+// 6. SERVICIO EN SEGUNDO PLANO: Sincronización MBA3 → tabla local productores (cada 60 min)
+builder.Services.AddHostedService<SincronizacionMba3ProductoresService>();
+
+// 7. SERVICIOS PARA FIRMA DIGITAL DE BITÁCORAS
+QuestPDF.Settings.License = LicenseType.Community;
+builder.Services.AddSingleton<EmailService>();
+builder.Services.AddSingleton<BitacoraPdfService>();
 
 var app = builder.Build();
 

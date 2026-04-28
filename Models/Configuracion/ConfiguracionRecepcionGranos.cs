@@ -40,4 +40,5 @@ public class ConfiguracionCampoDto {
     public int? GranoId { get; set; }
     public string TipoDato { get; set; } = "texto";
     public bool AfectaExportacion { get; set; } = false;
+    public string? Opciones { get; set; }
 }

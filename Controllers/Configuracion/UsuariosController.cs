@@ -108,6 +108,46 @@ namespace Alazan.API.Controllers
             finally { _db.Close(); }
         }
 
+        // --- NIP: ESTABLECER NIP DEL USUARIO AUTENTICADO ---
+        [HttpPost("nip")]
+        public async Task<IActionResult> SetNip([FromBody] NipRequest req)
+        {
+            var authId = Request.Headers["X-Auth-Id"].FirstOrDefault();
+            if (string.IsNullOrEmpty(req.Nip) || req.Nip.Length < 4)
+                return BadRequest(new { message = "El NIP debe tener al menos 4 dígitos" });
+
+            string hash = BCrypt.Net.BCrypt.HashPassword(req.Nip);
+
+            int rows;
+            if (!string.IsNullOrEmpty(authId) && Guid.TryParse(authId, out var authGuid))
+            {
+                rows = await _db.ExecuteAsync(
+                    "UPDATE dbo.usuarios SET nip_hash = @Hash WHERE auth_user_id = @AuthId",
+                    new { Hash = hash, AuthId = authGuid });
+            }
+            else
+            {
+                return BadRequest(new { message = "No se pudo identificar al usuario" });
+            }
+
+            return rows > 0 ? Ok(new { ok = true }) : NotFound(new { message = "Usuario no encontrado" });
+        }
+
+        // --- NIP: ESTABLECER NIP POR ID (para admin desde Gestión de Usuarios) ---
+        [HttpPost("{id}/nip")]
+        public async Task<IActionResult> SetNipById(int id, [FromBody] NipRequest req)
+        {
+            if (string.IsNullOrEmpty(req.Nip) || req.Nip.Length < 4)
+                return BadRequest(new { message = "El NIP debe tener al menos 4 dígitos" });
+
+            string hash = BCrypt.Net.BCrypt.HashPassword(req.Nip);
+            int rows = await _db.ExecuteAsync(
+                "UPDATE dbo.usuarios SET nip_hash = @Hash WHERE id = @Id",
+                new { Hash = hash, Id = id });
+
+            return rows > 0 ? Ok(new { ok = true }) : NotFound(new { message = "Usuario no encontrado" });
+        }
+
         // --- 4. ACTUALIZAR USUARIO ---
         [HttpPut("{id}")]
         public async Task<IActionResult> UpdateUsuario(int id, [FromBody] dynamic u)
@@ -153,5 +193,10 @@ namespace Alazan.API.Controllers
             catch (Exception ex) { transaction.Rollback(); return StatusCode(500, $"Error: {ex.Message}"); }
             finally { _db.Close(); }
         }
+    }
+
+    public class NipRequest
+    {
+        public string Nip { get; set; } = "";
     }
 }

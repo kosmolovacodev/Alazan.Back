@@ -54,25 +54,28 @@ namespace Alazan.API.Controllers
                                 correo = @correo,
                                 color_primario = @color_primario,
                                 mensaje_ticket = @mensaje_ticket,
-                                tiempo_autorizacion_auto = @tiempo_autorizacion_auto
+                                tiempo_autorizacion_auto = @tiempo_autorizacion_auto,
+                                logo_url = @logo_url
                             WHERE sede_id = @sedeId";
 
                 int affected = await _db.ExecuteAsync(sql, new {
                     model.nombre_empresa, model.rfc, model.direccion,
                     model.telefono, model.correo, model.color_primario,
-                    model.mensaje_ticket, model.tiempo_autorizacion_auto, sedeId
+                    model.mensaje_ticket, model.tiempo_autorizacion_auto,
+                    model.logo_url, sedeId
                 });
 
                 // Si no existía registro para esta sede, lo insertamos
                 if (affected == 0)
                 {
                     var sqlInsert = @"INSERT INTO dbo.configuracion_sistema
-                        (nombre_empresa, rfc, direccion, telefono, correo, color_primario, mensaje_ticket, tiempo_autorizacion_auto, sede_id)
-                        VALUES (@nombre_empresa, @rfc, @direccion, @telefono, @correo, @color_primario, @mensaje_ticket, @tiempo_autorizacion_auto, @sedeId)";
+                        (nombre_empresa, rfc, direccion, telefono, correo, color_primario, mensaje_ticket, tiempo_autorizacion_auto, logo_url, sede_id)
+                        VALUES (@nombre_empresa, @rfc, @direccion, @telefono, @correo, @color_primario, @mensaje_ticket, @tiempo_autorizacion_auto, @logo_url, @sedeId)";
                     await _db.ExecuteAsync(sqlInsert, new {
                         model.nombre_empresa, model.rfc, model.direccion,
                         model.telefono, model.correo, model.color_primario,
-                        model.mensaje_ticket, model.tiempo_autorizacion_auto, sedeId
+                        model.mensaje_ticket, model.tiempo_autorizacion_auto,
+                        model.logo_url, sedeId
                     });
                 }
 
@@ -100,5 +103,6 @@ namespace Alazan.API.Controllers
         public string color_primario { get; set; }
         public string mensaje_ticket { get; set; }
         public int tiempo_autorizacion_auto { get; set; } = 30; // Minutos para autorización automática de precio
+        public string? logo_url { get; set; }
     }
 }

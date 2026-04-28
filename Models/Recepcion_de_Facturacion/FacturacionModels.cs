@@ -83,6 +83,7 @@ namespace SistemaAlazan.Models
         public string? DescPredial { get; set; }
         public string? DescISR { get; set; }
         public string? DiasHabilesPago { get; set; }
+        public string? FolioFiscal { get; set; }
     }
 
     public class GuardarExpedienteRequest
@@ -115,6 +116,9 @@ namespace SistemaAlazan.Models
         public string? FechaOpinion { get; set; }
         public string? ActaConstitutivaBase64 { get; set; }
         public string? ActaConstitutivaNombre { get; set; }
+        public string? CuentaBancariaBase64 { get; set; }
+        public string? CuentaBancariaNombre { get; set; }
+        public bool? CuentaBancariaDatosCoiniciden { get; set; }
         public string? OtroBase64 { get; set; }
         public string? OtroNombre { get; set; }
     }

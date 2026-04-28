@@ -73,13 +73,14 @@ namespace SistemaAlazan.Models
     // ─── Request: AUTORIZADO → PAGADO ────────────────────────────────────────
     public class RegistrarPagoRequest
     {
-        public int     SolicitudId  { get; set; }
-        public DateTime FechaPago   { get; set; }
-        public string  FolioPago    { get; set; }
-        public int?    BancoId      { get; set; }
-        public int?    FormaPagoId  { get; set; }
-        public string  Cuenta       { get; set; }
-        public decimal ImportePago  { get; set; }
-        public int     SedeId       { get; set; }
+        public int      SolicitudId   { get; set; }
+        public DateTime FechaPago     { get; set; }
+        public string   FolioPago     { get; set; }
+        public int?     BancoId       { get; set; }
+        public int?     FormaPagoId   { get; set; }
+        public string   Cuenta        { get; set; }
+        public string?  CuentaOrigen  { get; set; }
+        public decimal  ImportePago   { get; set; }
+        public int      SedeId        { get; set; }
     }
 }

@@ -13,6 +13,7 @@ public class BasculaRecepcion
     public string? chofer { get; set; } // SQL: text
     public string? placas { get; set; } // SQL: text
     public decimal peso_bruto_kg { get; set; } // SQL: numeric
+    public decimal? ton_aprox { get; set; } // SQL: numeric — toneladas declaradas por el productor
     public decimal? tara_kg { get; set; } // SQL: numeric
     public decimal? peso_neto_kg { get; set; } // SQL: numeric
     public int grano_id { get; set; } // SQL: int

@@ -23,11 +23,15 @@ namespace Alazan.API.Controllers
                     dia_semana        AS diaSemana,
                     rol_operativo     AS rolOperativo,
                     firmas_operativo  AS firmasOperativo,
+                    etiqueta_operativo  AS etiquetaOperativo,
                     rol_supervisor    AS rolSupervisor,
                     firmas_supervisor AS firmasSupervisor,
+                    etiqueta_supervisor AS etiquetaSupervisor,
                     rol_gerente       AS rolGerente,
                     firmas_gerente    AS firmasGerente,
+                    etiqueta_gerente  AS etiquetaGerente,
                     firma_recepcion   AS firmaRecepcion,
+                    etiqueta_recepcion AS etiquetaRecepcion,
                     updated_at        AS updatedAt
                   FROM dbo.bitacoras_config");
             return Ok(rows);
@@ -40,42 +44,50 @@ namespace Alazan.API.Controllers
             await _db.ExecuteAsync(
                 @"IF EXISTS (SELECT 1 FROM dbo.bitacoras_config WHERE codigo_bitacora = @Codigo)
                       UPDATE dbo.bitacoras_config SET
-                          periodicidad      = @Periodicidad,
-                          dia_semana        = @DiaSemana,
-                          rol_operativo     = @RolOperativo,
-                          firmas_operativo  = @FirmasOperativo,
-                          rol_supervisor    = @RolSupervisor,
-                          firmas_supervisor = @FirmasSupervisor,
-                          rol_gerente       = @RolGerente,
-                          firmas_gerente    = @FirmasGerente,
-                          firma_recepcion   = @FirmaRecepcion,
-                          updated_at        = GETDATE()
+                          periodicidad        = @Periodicidad,
+                          dia_semana          = @DiaSemana,
+                          rol_operativo       = @RolOperativo,
+                          firmas_operativo    = @FirmasOperativo,
+                          etiqueta_operativo  = @EtiquetaOperativo,
+                          rol_supervisor      = @RolSupervisor,
+                          firmas_supervisor   = @FirmasSupervisor,
+                          etiqueta_supervisor = @EtiquetaSupervisor,
+                          rol_gerente         = @RolGerente,
+                          firmas_gerente      = @FirmasGerente,
+                          etiqueta_gerente    = @EtiquetaGerente,
+                          firma_recepcion     = @FirmaRecepcion,
+                          etiqueta_recepcion  = @EtiquetaRecepcion,
+                          updated_at          = GETDATE()
                       WHERE codigo_bitacora = @Codigo
                   ELSE
                       INSERT INTO dbo.bitacoras_config
                           (codigo_bitacora, periodicidad, dia_semana,
-                           rol_operativo, firmas_operativo,
-                           rol_supervisor, firmas_supervisor,
-                           rol_gerente, firmas_gerente,
-                           firma_recepcion, updated_at)
+                           rol_operativo, firmas_operativo, etiqueta_operativo,
+                           rol_supervisor, firmas_supervisor, etiqueta_supervisor,
+                           rol_gerente, firmas_gerente, etiqueta_gerente,
+                           firma_recepcion, etiqueta_recepcion, updated_at)
                       VALUES
                           (@Codigo, @Periodicidad, @DiaSemana,
-                           @RolOperativo, @FirmasOperativo,
-                           @RolSupervisor, @FirmasSupervisor,
-                           @RolGerente, @FirmasGerente,
-                           @FirmaRecepcion, GETDATE())",
+                           @RolOperativo, @FirmasOperativo, @EtiquetaOperativo,
+                           @RolSupervisor, @FirmasSupervisor, @EtiquetaSupervisor,
+                           @RolGerente, @FirmasGerente, @EtiquetaGerente,
+                           @FirmaRecepcion, @EtiquetaRecepcion, GETDATE())",
                 new
                 {
-                    Codigo            = codigo,
+                    Codigo              = codigo,
                     req.Periodicidad,
                     req.DiaSemana,
                     req.RolOperativo,
                     req.FirmasOperativo,
+                    req.EtiquetaOperativo,
                     req.RolSupervisor,
                     req.FirmasSupervisor,
+                    req.EtiquetaSupervisor,
                     req.RolGerente,
                     req.FirmasGerente,
+                    req.EtiquetaGerente,
                     req.FirmaRecepcion,
+                    req.EtiquetaRecepcion,
                 });
 
             return Ok(new { ok = true });
@@ -115,15 +127,19 @@ namespace Alazan.API.Controllers
 
     public class BitacoraConfigRequest
     {
-        public string Periodicidad      { get; set; } = "Diaria";
-        public string? DiaSemana        { get; set; }
-        public bool   RolOperativo      { get; set; }
-        public int    FirmasOperativo   { get; set; } = 2;
-        public bool   RolSupervisor     { get; set; }
-        public int    FirmasSupervisor  { get; set; } = 1;
-        public bool   RolGerente        { get; set; }
-        public int    FirmasGerente     { get; set; } = 1;
-        public bool   FirmaRecepcion    { get; set; }
+        public string  Periodicidad        { get; set; } = "Diaria";
+        public string? DiaSemana           { get; set; }
+        public bool    RolOperativo        { get; set; }
+        public int     FirmasOperativo     { get; set; } = 2;
+        public string? EtiquetaOperativo   { get; set; }
+        public bool    RolSupervisor       { get; set; }
+        public int     FirmasSupervisor    { get; set; } = 1;
+        public string? EtiquetaSupervisor  { get; set; }
+        public bool    RolGerente          { get; set; }
+        public int     FirmasGerente       { get; set; } = 1;
+        public string? EtiquetaGerente     { get; set; }
+        public bool    FirmaRecepcion      { get; set; }
+        public string? EtiquetaRecepcion   { get; set; }
     }
 
     public class NipConfigRequest

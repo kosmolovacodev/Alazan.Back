@@ -120,10 +120,11 @@ namespace Alazan.API.Controllers
                         -- Importe
                         ISNULL(fr.importe_factura, ISNULL(pl.importe_total, fr.monto_total)) AS importe,
 
-                        -- A pagar (importe * 0.987 retención federal)
-                        CAST(
-                            ISNULL(fr.importe_factura, ISNULL(pl.importe_total, fr.monto_total)) * 0.987
-                        AS DECIMAL(18,2)) AS aPagar,
+                        -- A pagar: del XML guardado (importe - predial - ISR) o fallback * 0.987
+                        ISNULL(
+                            TRY_CAST(JSON_VALUE(fr.datos_adicionales, '$.xml.aPagar') AS DECIMAL(18,2)),
+                            CAST(ISNULL(fr.importe_factura, ISNULL(pl.importe_total, fr.monto_total)) * 0.987 AS DECIMAL(18,2))
+                        ) AS aPagar,
 
                         fr.status,
                         ISNULL(fr.tiene_documentos, 0)  AS tieneDocumentos,
@@ -278,7 +279,14 @@ namespace Alazan.API.Controllers
 
                 // ── 1. Obtener recepciones que cumplen condiciones ────────────
                 var sqlGetRecepciones = @"
-                    SELECT fr.id, ISNULL(fr.monto_total, fr.importe_factura) AS monto, fr.sede_id
+                    SELECT
+                        fr.id,
+                        ISNULL(
+                            TRY_CAST(JSON_VALUE(fr.datos_adicionales, '$.xml.aPagar') AS DECIMAL(18,2)),
+                            CAST(ISNULL(fr.importe_factura, fr.monto_total) * 0.987 AS DECIMAL(18,2))
+                        ) AS monto,
+                        fr.sede_id,
+                        fr.productor_id
                     FROM facturacion_recepciones fr
                     INNER JOIN boletas b ON fr.boleta_id = b.id
                     WHERE b.ticket_numero IN @Tickets
@@ -314,8 +322,8 @@ namespace Alazan.API.Controllers
                     // 2b. Crear solicitudes_pago (si no existe ya una para ese facturacion_id)
                     var sqlInsert = @"
                         INSERT INTO solicitudes_pago
-                            (facturacion_id, monto_solicitado, prioridad, status, sede_id, created_at, updated_at)
-                        SELECT @FacturacionId, @Monto, 0, 'SOLICITAR', @SedeId, GETDATE(), GETDATE()
+                            (facturacion_id, productor_id, monto_solicitado, prioridad, status, sede_id, created_at, updated_at)
+                        SELECT @FacturacionId, @ProductorId, @Monto, 0, 'SOLICITAR', @SedeId, GETDATE(), GETDATE()
                         WHERE NOT EXISTS (
                             SELECT 1 FROM solicitudes_pago WHERE facturacion_id = @FacturacionId
                         );";
@@ -325,6 +333,7 @@ namespace Alazan.API.Controllers
                         await _db.ExecuteAsync(sqlInsert, new
                         {
                             FacturacionId = (int)r.id,
+                            ProductorId   = (int?)r.productor_id,
                             Monto         = (decimal)(r.monto ?? 0),
                             SedeId        = (int)r.sede_id
                         }, tx);
@@ -412,9 +421,10 @@ namespace Alazan.API.Controllers
 
                         -- Facturación / Pago
                         ISNULL(fr.importe_factura, ISNULL(pl.importe_total, fr.monto_total)) AS importe,
-                        CAST(
-                            ISNULL(fr.importe_factura, ISNULL(pl.importe_total, fr.monto_total)) * 0.987
-                        AS DECIMAL(18,2))                                               AS aPagar,
+                        ISNULL(
+                            TRY_CAST(JSON_VALUE(fr.datos_adicionales, '$.xml.aPagar') AS DECIMAL(18,2)),
+                            CAST(ISNULL(fr.importe_factura, ISNULL(pl.importe_total, fr.monto_total)) * 0.987 AS DECIMAL(18,2))
+                        )                                                               AS aPagar,
                         fr.uuid_fiscal                                                  AS folioFiscal,
                         fr.serie                                                        AS serie,
                         fr.folio                                                        AS folioFactura,
@@ -476,32 +486,42 @@ namespace Alazan.API.Controllers
                     ? new JsonObject()
                     : JsonNode.Parse(existingJson)?.AsObject() ?? new JsonObject();
 
+                decimal.TryParse(dto.Importe?.Replace(",",    "").Replace("$", ""), System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var importeNum);
+                decimal.TryParse(dto.PagoPredial?.Replace(",", "").Replace("$", ""), System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var pagoPredialNum);
+                decimal.TryParse(dto.DescISR?.Replace(",",    "").Replace("$", ""), System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var descISRNum);
+                var aPagarNum = importeNum - pagoPredialNum - descISRNum;
+
                 root["xml"] = JsonSerializer.SerializeToNode(new
                 {
                     nombre = dto.XmlNombre ?? "",
                     base64 = dto.XmlBase64 ?? "",
                     importe = dto.Importe,
+                    importeNum,
                     pagoPredial = dto.PagoPredial,
+                    pagoPredialNum,
                     descPredial = dto.DescPredial,
                     descISR = dto.DescISR,
+                    descISRNum,
+                    aPagar = aPagarNum,
                     diasHabilesPago = dto.DiasHabilesPago,
+                    folioFiscal = dto.FolioFiscal ?? "",
                     fechaGuardado = DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ss")
                 });
 
                 var mergedJson = root.ToJsonString();
-                decimal.TryParse(dto.Importe?.Replace(",", "").Replace("$", ""), System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var importeNum);
 
                 var sql = @"
                     UPDATE fr
                     SET fr.tiene_factura_xml = 1,
                         fr.importe_factura   = CASE WHEN @ImporteNum > 0 THEN @ImporteNum ELSE fr.importe_factura END,
+                        fr.uuid_fiscal       = CASE WHEN @FolioFiscal <> '' THEN @FolioFiscal ELSE fr.uuid_fiscal END,
                         fr.datos_adicionales = @MergedJson,
                         fr.updated_at        = GETDATE()
                     FROM facturacion_recepciones fr
                     WHERE fr.ticket_numero IN @Tickets
                       AND (@SedeId = 0 OR fr.sede_id = @SedeId);";
 
-                await _db.ExecuteAsync(sql, new { dto.Tickets, ImporteNum = importeNum, MergedJson = mergedJson, dto.SedeId });
+                await _db.ExecuteAsync(sql, new { dto.Tickets, ImporteNum = importeNum, MergedJson = mergedJson, dto.SedeId, FolioFiscal = dto.FolioFiscal ?? "" });
                 return Ok(new { success = true });
             }
             catch (Exception ex)
@@ -854,6 +874,12 @@ namespace Alazan.API.Controllers
 
                     if (!string.IsNullOrEmpty(request.OpinionBase64))
                         node!["opinion"] = new JsonObject { ["nombre"] = request.OpinionNombre, ["base64"] = request.OpinionBase64, ["fecha"] = request.FechaOpinion };
+
+                    if (!string.IsNullOrEmpty(request.CuentaBancariaBase64))
+                        node!["cuenta_bancaria"] = new JsonObject { ["nombre"] = request.CuentaBancariaNombre, ["base64"] = request.CuentaBancariaBase64 };
+
+                    if (request.CuentaBancariaDatosCoiniciden.HasValue)
+                        node!["cuenta_bancaria_datos_coinciden"] = request.CuentaBancariaDatosCoiniciden.Value;
 
                     // Datos de contacto adicional para el expediente
                     node!["contacto_adicional"] = new JsonObject {

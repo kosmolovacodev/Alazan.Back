@@ -29,6 +29,7 @@ namespace Alazan.API.Controllers
                             b.peso_bruto_kg AS pesoBruto,
                             b.tara_kg AS tara,
                             b.peso_neto_kg AS pesoNeto,
+                            b.ton_aprox AS tonAprox,
                             b.status,
 
                             p.tipo_persona,
@@ -92,12 +93,13 @@ namespace Alazan.API.Controllers
                 if (modelo.id > 0) 
                 {
                     // Si el ID existe, actualizamos usando el ID como filtro
-                    sql = @"UPDATE dbo.bascula_recepciones SET 
+                    sql = @"UPDATE dbo.bascula_recepciones SET
                                 ticket_numero = @ticket_numero,
                                 productor_id = @productor_id,
                                 chofer = @chofer,
                                 placas = @placas,
                                 peso_bruto_kg = @peso_bruto_kg,
+                                ton_aprox = @ton_aprox,
                                 grano_id = @grano_id,
                                 origen_id = @origen_id,
                                 comprador_id = @comprador_id,
@@ -112,12 +114,12 @@ namespace Alazan.API.Controllers
                     // Si el ID es 0, es un registro nuevo (INSERT)
                     sql = @"INSERT INTO dbo.bascula_recepciones
                                 (ticket_numero, fecha_hora, productor_id, chofer, placas,
-                                peso_bruto_kg, grano_id, origen_id, comprador_id,
+                                peso_bruto_kg, ton_aprox, grano_id, origen_id, comprador_id,
                                 status, datos_adicionales, boleta_numero, usuario_registro_id, sede_id,
                                 created_at, updated_at)
                             VALUES
                                 (@ticket_numero, SYSDATETIMEOFFSET(), @productor_id, @chofer, @placas,
-                                @peso_bruto_kg, @grano_id, @origen_id, @comprador_id,
+                                @peso_bruto_kg, @ton_aprox, @grano_id, @origen_id, @comprador_id,
                                 @status, @datos_adicionales, @boleta_numero, @usuario_registro_id, @sede_id,
                                 SYSDATETIMEOFFSET(), SYSDATETIMEOFFSET());
                             SELECT CAST(SCOPE_IDENTITY() as int);";
