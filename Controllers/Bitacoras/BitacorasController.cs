@@ -16,23 +16,24 @@ namespace Alazan.API.Controllers
         private readonly EmailService _email;
         private readonly BitacoraPdfService _pdf;
         private readonly IConfiguration _config;
+        private readonly IWebHostEnvironment _env;
 
         public BitacorasController(IDbConnection db, EmailService email,
-            BitacoraPdfService pdf, IConfiguration config)
+            BitacoraPdfService pdf, IConfiguration config, IWebHostEnvironment env)
         {
-            _db = db; _email = email; _pdf = pdf; _config = config;
+            _db = db; _email = email; _pdf = pdf; _config = config; _env = env;
         }
 
         // ─── GET /bitacoras/secciones?sedeId=X ───────────────────────
         [HttpGet("secciones")]
         public async Task<IActionResult> GetSecciones([FromQuery] int sedeId)
         {
+            var secsStatsWhere = sedeId == 0 ? "WHERE activo = 1" : "WHERE activo = 1 AND sede_id = @SedeId";
             var stats = await _db.QueryAsync(
-                @"SELECT seccion_codigo AS seccionCodigo,
+                $@"SELECT seccion_codigo AS seccionCodigo,
                          SUM(CASE WHEN status = 'Pendiente' THEN 1 ELSE 0 END) AS pendiente
                    FROM dbo.bitacoras_registros
-                  WHERE activo = 1
-                    AND (@SedeId = 0 OR sede_id = @SedeId)
+                  {secsStatsWhere}
                   GROUP BY seccion_codigo",
                 new { SedeId = sedeId });
 
@@ -77,8 +78,13 @@ namespace Alazan.API.Controllers
         [HttpGet("definicion/{seccion}")]
         public async Task<IActionResult> GetDefinicion(string seccion, [FromQuery] int sedeId)
         {
+            // Contar pendientes con filtro de sede directo (evita OR que impide índices)
+            var statsWhere = sedeId == 0
+                ? "WHERE activo = 1"
+                : "WHERE activo = 1 AND sede_id = @SedeId";
+
             var bitacoras = await _db.QueryAsync(
-                @"SELECT
+                $@"SELECT
                     d.codigo,
                     d.nombre,
                     d.tipo,
@@ -90,8 +96,7 @@ namespace Alazan.API.Controllers
                       SELECT codigo_bitacora,
                              SUM(CASE WHEN status = 'Pendiente' THEN 1 ELSE 0 END) AS pendiente
                         FROM dbo.bitacoras_registros
-                       WHERE activo = 1
-                         AND (@SedeId = 0 OR sede_id = @SedeId)
+                       {statsWhere}
                        GROUP BY codigo_bitacora
                   ) stats ON stats.codigo_bitacora = d.codigo
                   WHERE d.seccion_codigo = @Seccion
@@ -126,8 +131,9 @@ namespace Alazan.API.Controllers
         [HttpGet("stats")]
         public async Task<IActionResult> GetStats([FromQuery] int sedeId)
         {
+            var statsSedeWhere = sedeId == 0 ? "" : "AND sede_id = @SedeId";
             var rows = await _db.QueryAsync(
-                @"SELECT
+                $@"SELECT
                     codigo_bitacora   AS codigoBitacora,
                     seccion_codigo    AS seccionCodigo,
                     COUNT(*)          AS total,
@@ -136,7 +142,7 @@ namespace Alazan.API.Controllers
                     SUM(CASE WHEN status = 'Impresa'   THEN 1 ELSE 0 END) AS impresa
                   FROM dbo.bitacoras_registros
                   WHERE activo = 1
-                    AND (@SedeId = 0 OR sede_id = @SedeId)
+                  {statsSedeWhere}
                   GROUP BY codigo_bitacora, seccion_codigo",
                 new { SedeId = sedeId });
             return Ok(rows);
@@ -280,17 +286,26 @@ namespace Alazan.API.Controllers
             string tipo = (string)def.tipo;
             string? fuenteQuery = (string?)def.fuenteQuery;
 
+            // Obtener período actual para filtrar solo registros del período vigente
+            var cfgPer = await _db.QueryFirstOrDefaultAsync(
+                "SELECT periodicidad FROM dbo.bitacoras_config WHERE codigo_bitacora = @Codigo",
+                new { Codigo = codigo });
+            var periodoInicio = GetPeriodStart((string?)cfgPer?.periodicidad);
+            var periodoFin    = DateTime.Today.AddDays(1); // exclusivo: < mañana = hasta hoy
+
             // ── LINKED: datos vienen de vista operacional ─────────────
             if (tipo == "linked" && !string.IsNullOrWhiteSpace(fuenteQuery))
             {
                 if (!fuenteQuery.StartsWith("vw_bitacora_", StringComparison.OrdinalIgnoreCase))
                     return BadRequest(new { message = "Nombre de vista inválido" });
 
+                var sedeFilter = sedeId == 0 ? "" : "AND sede_id = @SedeId";
                 var sql = $@"SELECT * FROM dbo.{fuenteQuery}
-                             WHERE (@SedeId = 0 OR sede_id = @SedeId)
-                             ORDER BY fecha DESC, id DESC";
+                             WHERE fecha >= @PeriodoInicio AND fecha < @PeriodoFin
+                             {sedeFilter}
+                             ORDER BY fecha ASC, id ASC";
 
-                var rows = await _db.QueryAsync(sql, new { SedeId = sedeId });
+                var rows = await _db.QueryAsync(sql, new { SedeId = sedeId, PeriodoInicio = periodoInicio, PeriodoFin = periodoFin });
 
                 var result = rows.Select(r =>
                 {
@@ -320,8 +335,9 @@ namespace Alazan.API.Controllers
             }
 
             // ── MANUAL: datos vienen de bitacoras_registros ───────────
+            var sedeWhere = sedeId == 0 ? "" : "AND sede_id = @SedeId";
             var manualRows = await _db.QueryAsync(
-                @"SELECT
+                $@"SELECT
                     id,
                     codigo_bitacora    AS codigoBitacora,
                     seccion_codigo     AS seccionCodigo,
@@ -336,9 +352,10 @@ namespace Alazan.API.Controllers
                   FROM dbo.bitacoras_registros
                   WHERE activo = 1
                     AND codigo_bitacora = @Codigo
-                    AND (@SedeId = 0 OR sede_id = @SedeId)
-                  ORDER BY fecha DESC, id DESC",
-                new { Codigo = codigo, SedeId = sedeId });
+                    AND fecha >= @PeriodoInicio AND fecha < @PeriodoFin
+                    {sedeWhere}
+                  ORDER BY fecha ASC, id ASC",
+                new { Codigo = codigo, SedeId = sedeId, PeriodoInicio = periodoInicio, PeriodoFin = periodoFin });
 
             var manualResult = manualRows.Select(r => new
             {
@@ -428,6 +445,7 @@ namespace Alazan.API.Controllers
                     : JsonSerializer.Deserialize<Dictionary<string, string>>(datosJson) ?? new();
 
                 var encabezados = columnas.Select(c => (string)c.label).ToList();
+                var campos      = columnas.Select(c => (string)c.campo).ToList();
                 var filas = new List<Dictionary<string, string>> { datosDict };
 
                 // 3. Leer config de firmas para armar los slots visuales del PDF
@@ -468,6 +486,7 @@ namespace Alazan.API.Controllers
                     Fecha          = registro.fecha?.ToString("dd/MM/yyyy") ?? "",
                     GeneradoPor    = generadoPor,
                     Encabezados    = encabezados,
+                    Campos         = campos,
                     Filas          = filas,
                     SlotsFirma     = slotsPdf,
                 };
@@ -645,24 +664,6 @@ namespace Alazan.API.Controllers
             return Ok(firmas);
         }
 
-        // ─── GET /bitacoras/pdf/{sedeId}/{filename} — Servir PDF ─────
-        [HttpGet("pdf/{sedeId:int}/{filename}")]
-        public IActionResult ServirPdf(int sedeId, string filename)
-        {
-            // Sanitizar: no permitir traversal
-            if (filename.Contains("..") || filename.Contains('/') || filename.Contains('\\'))
-                return BadRequest();
-
-            var env = HttpContext.RequestServices.GetRequiredService<IWebHostEnvironment>();
-            var filePath = Path.Combine(env.ContentRootPath, "bitacoras-pdfs",
-                sedeId.ToString(), filename);
-
-            if (!System.IO.File.Exists(filePath))
-                return NotFound();
-
-            return PhysicalFile(filePath, "application/pdf");
-        }
-
         // ─── PUT /bitacoras/{id}/status ───────────────────────────────
         [HttpPut("{id:int}/status")]
         public async Task<IActionResult> ActualizarStatus(int id, [FromBody] StatusRequest dto)
@@ -703,8 +704,9 @@ namespace Alazan.API.Controllers
 
             var userRol = ((string?)usuario.rol ?? "").ToLower();
 
+            var notifSedeWhere = sedeId == 0 ? "" : "AND d.sede_id = @SedeId";
             var notificaciones = await _db.QueryAsync(
-                @"SELECT
+                $@"SELECT
                     df.id              AS firmaId,
                     df.documento_id    AS documentoId,
                     df.rol_requerido   AS rolRequerido,
@@ -725,7 +727,7 @@ namespace Alazan.API.Controllers
                   WHERE df.usuario_id  IS NULL
                     AND df.firma_texto IS NULL
                     AND d.status != 'Firmado'
-                    AND (@SedeId = 0 OR d.sede_id = @SedeId)
+                    {notifSedeWhere}
                     AND (LOWER(@UserRol) LIKE LOWER(df.rol_requerido) + '%'
                          OR (LOWER(@UserRol) IN ('admin','administrador') AND LOWER(df.rol_requerido) = 'gerente'))",
                 new { SedeId = sedeId, UserRol = userRol });
@@ -809,13 +811,15 @@ namespace Alazan.API.Controllers
                 else
                 {
                     documentoId = await _db.QuerySingleAsync<int>(
-                        @"INSERT INTO dbo.bitacoras_documentos (codigo_bitacora, sede_id, fecha, status, created_at)
-                          VALUES (@Codigo, @SedeId, @Fecha, 'Pendiente', GETDATE());
+                        @"INSERT INTO dbo.bitacoras_documentos
+                            (codigo_bitacora, sede_id, fecha, status, generado_por, created_at)
+                          VALUES (@Codigo, @SedeId, @Fecha, 'Pendiente', @GeneradoPor, GETDATE());
                           SELECT CAST(SCOPE_IDENTITY() AS INT);",
-                        new { Codigo = dto.CodigoBitacora, SedeId = dto.SedeId, Fecha = fecha });
+                        new { Codigo = dto.CodigoBitacora, SedeId = dto.SedeId,
+                              Fecha = fecha, GeneradoPor = dto.GeneradoPor ?? "" });
                 }
 
-                // Crear slots de firma si no existen
+                // Sincronizar slots de firma con la config actual
                 if (cfg != null)
                 {
                     var slots = new List<(string Rol, string Etiqueta, int Orden)>();
@@ -828,6 +832,30 @@ namespace Alazan.API.Controllers
                     if ((bool)cfg.firma_recepcion)
                         slots.Add(("recepcion", (string?)cfg.etiqueta_recepcion ?? "Recepción", 4));
 
+                    // Eliminar slots pendientes (sin firma) que ya no están en la config actual
+                    var rolesActivos = slots.Select(s => s.Rol).ToArray();
+                    if (rolesActivos.Length > 0)
+                    {
+                        await _db.ExecuteAsync(
+                            @"DELETE FROM dbo.bitacoras_documento_firmas
+                              WHERE documento_id = @DocId
+                                AND firma_texto IS NULL
+                                AND usuario_id  IS NULL
+                                AND rol_requerido NOT IN @Roles",
+                            new { DocId = documentoId, Roles = rolesActivos });
+                    }
+                    else
+                    {
+                        // Sin roles en config → borrar todos los slots pendientes
+                        await _db.ExecuteAsync(
+                            @"DELETE FROM dbo.bitacoras_documento_firmas
+                              WHERE documento_id = @DocId
+                                AND firma_texto IS NULL
+                                AND usuario_id  IS NULL",
+                            new { DocId = documentoId });
+                    }
+
+                    // Agregar slots que faltan
                     foreach (var (rol, etiqueta, orden) in slots)
                     {
                         await _db.ExecuteAsync(
@@ -862,6 +890,9 @@ namespace Alazan.API.Controllers
                 string? fuenteQuery = (string?)def.fuenteQuery;
                 var filas = new List<Dictionary<string, object?>>();
 
+                var periodoFin = GetPeriodEnd(periodicidad);
+                var sedeWhere2 = dto.SedeId == 0 ? "" : "AND sede_id = @SedeId";
+
                 if (tipo == "linked" && !string.IsNullOrWhiteSpace(fuenteQuery))
                 {
                     if (!fuenteQuery.StartsWith("vw_bitacora_", StringComparison.OrdinalIgnoreCase))
@@ -869,11 +900,10 @@ namespace Alazan.API.Controllers
 
                     var rows = await _db.QueryAsync(
                         $@"SELECT * FROM dbo.{fuenteQuery}
-                           WHERE (@SedeId = 0 OR sede_id = @SedeId)
-                             AND CAST(fecha AS DATE) >= @PeriodoInicio
-                             AND CAST(fecha AS DATE) <= CAST(GETDATE() AS DATE)
+                           WHERE fecha >= @PeriodoInicio AND fecha < DATEADD(DAY, 1, @PeriodoFin)
+                           {sedeWhere2}
                            ORDER BY fecha, id",
-                        new { SedeId = dto.SedeId, PeriodoInicio = periodoInicio });
+                        new { SedeId = dto.SedeId, PeriodoInicio = periodoInicio, PeriodoFin = periodoFin });
 
                     filas = rows.Select(r =>
                     {
@@ -884,13 +914,13 @@ namespace Alazan.API.Controllers
                 else
                 {
                     var rows = await _db.QueryAsync(
-                        @"SELECT datos_json FROM dbo.bitacoras_registros
+                        $@"SELECT datos_json FROM dbo.bitacoras_registros
                           WHERE codigo_bitacora = @Codigo AND sede_id = @SedeId
-                            AND CAST(fecha AS DATE) >= @PeriodoInicio
-                            AND CAST(fecha AS DATE) <= CAST(GETDATE() AS DATE)
+                            AND fecha >= @PeriodoInicio AND fecha < DATEADD(DAY, 1, @PeriodoFin)
                             AND activo = 1
                           ORDER BY fecha, id",
-                        new { Codigo = dto.CodigoBitacora, SedeId = dto.SedeId, PeriodoInicio = periodoInicio });
+                        new { Codigo = dto.CodigoBitacora, SedeId = dto.SedeId,
+                              PeriodoInicio = periodoInicio, PeriodoFin = periodoFin });
 
                     foreach (var r in rows)
                         if (!string.IsNullOrEmpty((string?)r.datos_json))
@@ -1029,6 +1059,13 @@ namespace Alazan.API.Controllers
                             new { Id = documentoId }, transaction: trans);
 
                     trans.Commit();
+
+                    // Auto-generar PDF cuando se completa la última firma
+                    if (pendientes == 0)
+                    {
+                        try { await GenerarPdfDocumentoInternoAsync(documentoId, ""); }
+                        catch { /* no bloquear la respuesta si el PDF falla */ }
+                    }
                 }
                 catch { trans.Rollback(); throw; }
 
@@ -1052,6 +1089,321 @@ namespace Alazan.API.Controllers
             }
         }
 
+        // ─── GET /bitacoras/historial ─────────────────────────────────
+        [HttpGet("historial")]
+        public async Task<IActionResult> GetHistorial(
+            [FromQuery] int sedeId,
+            [FromQuery] string? desde,
+            [FromQuery] string? hasta,
+            [FromQuery] string? status,
+            [FromQuery] string? codigoBitacora)
+        {
+            var histSedeWhere  = sedeId == 0 ? "" : "AND d.sede_id = @SedeId";
+            var rows = await _db.QueryAsync(
+                $@"SELECT
+                    d.id,
+                    d.codigo_bitacora   AS codigoBitacora,
+                    bd.nombre           AS nombreBitacora,
+                    bd.seccion_codigo   AS seccionCodigo,
+                    bs.nombre           AS nombreSeccion,
+                    bs.color            AS seccionColor,
+                    d.sede_id           AS sedeId,
+                    CONVERT(DATE, d.fecha) AS fecha,
+                    d.status,
+                    d.generado_por      AS generadoPor,
+                    d.created_at        AS creadoEn,
+                    d.pdf_path          AS pdfPath,
+                    COUNT(df.id)        AS totalFirmas,
+                    SUM(CASE WHEN df.usuario_id IS NOT NULL THEN 1 ELSE 0 END) AS firmasCompletadas
+                  FROM dbo.bitacoras_documentos d
+                  JOIN dbo.bitacoras_definicion bd ON bd.codigo = d.codigo_bitacora
+                  JOIN dbo.bitacoras_secciones  bs ON bs.codigo = bd.seccion_codigo
+                  LEFT JOIN dbo.bitacoras_documento_firmas df ON df.documento_id = d.id
+                  WHERE 1=1
+                    {histSedeWhere}
+                    AND (@Desde  IS NULL OR d.fecha >= @Desde)
+                    AND (@Hasta  IS NULL OR d.fecha <  DATEADD(DAY, 1, CAST(@Hasta AS DATE)))
+                    AND (@Status IS NULL OR d.status = @Status)
+                    AND (@CodigoBitacora IS NULL OR d.codigo_bitacora = @CodigoBitacora)
+                  GROUP BY d.id, d.codigo_bitacora, bd.nombre, bd.seccion_codigo,
+                           bs.nombre, bs.color, d.sede_id, d.fecha, d.status,
+                           d.generado_por, d.created_at, d.pdf_path
+                  ORDER BY d.fecha DESC, d.created_at DESC",
+                new
+                {
+                    SedeId          = sedeId,
+                    Desde           = string.IsNullOrWhiteSpace(desde)           ? (string?)null : desde,
+                    Hasta           = string.IsNullOrWhiteSpace(hasta)           ? (string?)null : hasta,
+                    Status          = string.IsNullOrWhiteSpace(status)          ? (string?)null : status,
+                    CodigoBitacora  = string.IsNullOrWhiteSpace(codigoBitacora)  ? (string?)null : codigoBitacora,
+                });
+
+            var baseUrl = _config["App:BaseUrl"] ?? "";
+            var result = rows.Select(r => new
+            {
+                r.id,
+                r.codigoBitacora,
+                r.nombreBitacora,
+                r.seccionCodigo,
+                r.nombreSeccion,
+                r.seccionColor,
+                r.sedeId,
+                fecha           = ((DateTime)r.fecha).ToString("yyyy-MM-dd"),
+                r.status,
+                generadoPor     = (string?)r.generadoPor,
+                r.creadoEn,
+                pdfPath         = (string?)r.pdfPath,
+                pdfUrl          = r.pdfPath != null ? $"{baseUrl}/api/bitacoras/pdf/{r.pdfPath}" : null,
+                r.totalFirmas,
+                r.firmasCompletadas,
+            });
+
+            return Ok(result);
+        }
+
+        // ─── GET /bitacoras/documentos/{documentoId}/detalle ──────────
+        [HttpGet("documentos/{documentoId:int}/detalle")]
+        public async Task<IActionResult> GetDocumentoDetalle(int documentoId)
+        {
+            var doc = await _db.QueryFirstOrDefaultAsync(
+                @"SELECT d.id, d.codigo_bitacora AS codigoBitacora, d.sede_id AS sedeId,
+                         CONVERT(DATE, d.fecha) AS fecha, d.status,
+                         d.generado_por AS generadoPor,
+                         bd.nombre AS nombreBitacora, bd.tipo, bd.fuente_query AS fuenteQuery,
+                         bs.nombre AS nombreSeccion
+                  FROM dbo.bitacoras_documentos d
+                  JOIN dbo.bitacoras_definicion bd ON bd.codigo = d.codigo_bitacora
+                  JOIN dbo.bitacoras_secciones  bs ON bs.codigo = bd.seccion_codigo
+                  WHERE d.id = @Id",
+                new { Id = documentoId });
+
+            if (doc == null) return NotFound(new { message = "Documento no encontrado" });
+
+            var cfgPer = await _db.QueryFirstOrDefaultAsync(
+                "SELECT periodicidad FROM dbo.bitacoras_config WHERE codigo_bitacora = @Codigo",
+                new { Codigo = (string)doc.codigoBitacora });
+
+            var docFecha      = (DateTime)doc.fecha;
+            var periodoInicio = GetPeriodStartFromDate((string?)cfgPer?.periodicidad, docFecha);
+            var periodoFin    = GetPeriodEndFromDate((string?)cfgPer?.periodicidad, docFecha);
+
+            string tipo = (string)doc.tipo;
+            string? fuenteQuery = (string?)doc.fuenteQuery;
+            var filas = new List<Dictionary<string, object?>>();
+
+            var detSedeFilter = (int)doc.sedeId == 0 ? "" : "AND sede_id = @SedeId";
+
+            if (tipo == "linked" && !string.IsNullOrWhiteSpace(fuenteQuery))
+            {
+                if (!fuenteQuery.StartsWith("vw_bitacora_", StringComparison.OrdinalIgnoreCase))
+                    return BadRequest(new { message = "Nombre de vista inválido" });
+
+                var rows = await _db.QueryAsync(
+                    $@"SELECT * FROM dbo.{fuenteQuery}
+                       WHERE fecha >= @PeriodoInicio AND fecha < DATEADD(DAY, 1, @PeriodoFin)
+                       {detSedeFilter}
+                       ORDER BY fecha, id",
+                    new { SedeId = (int)doc.sedeId, PeriodoInicio = periodoInicio, PeriodoFin = periodoFin });
+
+                filas = rows.Select(r =>
+                {
+                    var dict = (IDictionary<string, object?>)r;
+                    return dict.ToDictionary(kv => kv.Key.ToLowerInvariant(), kv => kv.Value);
+                }).ToList();
+            }
+            else
+            {
+                var rows = await _db.QueryAsync(
+                    $@"SELECT datos_json FROM dbo.bitacoras_registros
+                      WHERE codigo_bitacora = @Codigo AND sede_id = @SedeId
+                        AND fecha >= @PeriodoInicio AND fecha < DATEADD(DAY, 1, @PeriodoFin)
+                        AND activo = 1
+                      ORDER BY fecha, id",
+                    new { Codigo = (string)doc.codigoBitacora, SedeId = (int)doc.sedeId,
+                          PeriodoInicio = periodoInicio, PeriodoFin = periodoFin });
+
+                foreach (var r in rows)
+                    if (!string.IsNullOrEmpty((string?)r.datos_json))
+                    {
+                        var d = JsonSerializer.Deserialize<Dictionary<string, object?>>(r.datos_json);
+                        if (d != null) filas.Add(d);
+                    }
+            }
+
+            var columnas = await _db.QueryAsync(
+                @"SELECT campo, label, tipo_dato AS tipoDato, es_meta AS esMeta, orden
+                  FROM dbo.bitacoras_columnas
+                  WHERE codigo_bitacora = @Codigo AND visible = 1
+                  ORDER BY orden",
+                new { Codigo = (string)doc.codigoBitacora });
+
+            var firmas = await _db.QueryAsync(
+                @"SELECT id, rol_requerido AS rolRequerido, etiqueta, orden,
+                         usuario_id AS usuarioId, nombre_firmante AS nombreFirmante,
+                         firma_texto AS firmaTexto, firmado_en AS firmadoEn
+                  FROM dbo.bitacoras_documento_firmas
+                  WHERE documento_id = @DocId
+                  ORDER BY orden, id",
+                new { DocId = documentoId });
+
+            return Ok(new { documento = doc, columnas, filas, firmas });
+        }
+
+        // ─── POST /bitacoras/documentos/{documentoId}/generar-pdf ─────
+        [HttpPost("documentos/{documentoId:int}/generar-pdf")]
+        public async Task<IActionResult> GenerarPdfDocumento(int documentoId, [FromBody] GenerarPdfRequest? req)
+        {
+            try
+            {
+                var pdfRelPath = await GenerarPdfDocumentoInternoAsync(
+                    documentoId,
+                    req?.GeneradoPor    ?? "",
+                    req?.NombreSede     ?? "",
+                    req?.NombreEmpresa  ?? "",
+                    req?.Rfc            ?? "");
+                var baseUrl = _config["App:BaseUrl"] ?? "";
+                return Ok(new { pdfUrl = $"{baseUrl}/api/bitacoras/pdf/{pdfRelPath}", pdfPath = pdfRelPath });
+            }
+            catch (KeyNotFoundException)
+            {
+                return NotFound(new { message = "Documento no encontrado" });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { message = "Error al generar PDF del documento", error = ex.Message });
+            }
+        }
+
+        // ─── Helper interno: genera PDF de documento y actualiza pdf_path ─
+        private async Task<string> GenerarPdfDocumentoInternoAsync(int documentoId, string generadoPor, string nombreSede = "", string nombreEmpresa = "", string rfc = "")
+        {
+            var doc = await _db.QueryFirstOrDefaultAsync(
+                @"SELECT d.id, d.codigo_bitacora AS codigoBitacora, d.sede_id AS sedeId,
+                         CONVERT(DATE, d.fecha) AS fecha, d.status,
+                         bd.nombre AS nombreBitacora, bd.tipo, bd.fuente_query AS fuenteQuery,
+                         bs.nombre AS nombreSeccion
+                  FROM dbo.bitacoras_documentos d
+                  JOIN dbo.bitacoras_definicion bd ON bd.codigo = d.codigo_bitacora
+                  JOIN dbo.bitacoras_secciones  bs ON bs.codigo = bd.seccion_codigo
+                  WHERE d.id = @Id",
+                new { Id = documentoId });
+
+            if (doc == null) throw new KeyNotFoundException();
+
+            var cfgPer = await _db.QueryFirstOrDefaultAsync(
+                "SELECT periodicidad FROM dbo.bitacoras_config WHERE codigo_bitacora = @Codigo",
+                new { Codigo = (string)doc.codigoBitacora });
+
+            var docFecha      = (DateTime)doc.fecha;
+            var periodoInicio = GetPeriodStartFromDate((string?)cfgPer?.periodicidad, docFecha);
+            var periodoFin    = GetPeriodEndFromDate((string?)cfgPer?.periodicidad, docFecha);
+
+            string tipo = (string)doc.tipo;
+            string? fuenteQuery = (string?)doc.fuenteQuery;
+            var filasDict = new List<Dictionary<string, string>>();
+
+            var pdfSedeFilter = (int)doc.sedeId == 0 ? "" : "AND sede_id = @SedeId";
+
+            if (tipo == "linked" && !string.IsNullOrWhiteSpace(fuenteQuery))
+            {
+                if (!fuenteQuery.StartsWith("vw_bitacora_", StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("Nombre de vista inválido");
+
+                var rows = await _db.QueryAsync(
+                    $@"SELECT * FROM dbo.{fuenteQuery}
+                       WHERE fecha >= @PeriodoInicio AND fecha < DATEADD(DAY, 1, @PeriodoFin)
+                       {pdfSedeFilter}
+                       ORDER BY fecha, id",
+                    new { SedeId = (int)doc.sedeId, PeriodoInicio = periodoInicio, PeriodoFin = periodoFin });
+
+                foreach (var r in rows)
+                {
+                    var dict = (IDictionary<string, object?>)r;
+                    filasDict.Add(dict.ToDictionary(kv => kv.Key.ToLowerInvariant(),
+                        kv => kv.Value?.ToString() ?? ""));
+                }
+            }
+            else
+            {
+                var rows = await _db.QueryAsync(
+                    $@"SELECT datos_json FROM dbo.bitacoras_registros
+                      WHERE codigo_bitacora = @Codigo AND sede_id = @SedeId
+                        AND fecha >= @PeriodoInicio AND fecha < DATEADD(DAY, 1, @PeriodoFin)
+                        AND activo = 1
+                      ORDER BY fecha, id",
+                    new { Codigo = (string)doc.codigoBitacora, SedeId = (int)doc.sedeId,
+                          PeriodoInicio = periodoInicio, PeriodoFin = periodoFin });
+
+                foreach (var r in rows)
+                    if (!string.IsNullOrEmpty((string?)r.datos_json))
+                    {
+                        var d = JsonSerializer.Deserialize<Dictionary<string, string>>(r.datos_json);
+                        if (d != null) filasDict.Add(d);
+                    }
+            }
+
+            var columnas = await _db.QueryAsync(
+                @"SELECT campo, label FROM dbo.bitacoras_columnas
+                  WHERE codigo_bitacora = @Codigo AND visible = 1
+                  ORDER BY orden",
+                new { Codigo = (string)doc.codigoBitacora });
+
+            var firmasDb = await _db.QueryAsync(
+                @"SELECT etiqueta, usuario_id AS usuarioId,
+                         nombre_firmante AS nombreFirmante, firmado_en AS firmadoEn
+                  FROM dbo.bitacoras_documento_firmas
+                  WHERE documento_id = @DocId
+                  ORDER BY orden, id",
+                new { DocId = documentoId });
+
+            var firmasPdf = firmasDb.Select(f => new BitacoraDocumentoFirmaPdf
+            {
+                Etiqueta       = (string)f.etiqueta,
+                Firmado        = f.usuarioId != null,
+                NombreFirmante = (string?)f.nombreFirmante,
+                FirmadoEn      = f.firmadoEn != null ? ((DateTime)f.firmadoEn).ToString("dd/MM/yyyy") : null,
+            }).ToList();
+
+            var pdfData = new BitacoraDocumentoPdfData
+            {
+                DocumentoId    = documentoId,
+                SedeId         = (int)doc.sedeId,
+                CodigoBitacora = (string)doc.codigoBitacora,
+                NombreBitacora = (string)doc.nombreBitacora,
+                Seccion        = (string)doc.nombreSeccion,
+                Sede           = nombreSede,
+                Fecha          = docFecha.ToString("dd/MM/yyyy"),
+                GeneradoPor    = generadoPor,
+                NombreEmpresa  = nombreEmpresa,
+                Rfc            = rfc,
+                Encabezados    = columnas.Select(c => (string)c.label).ToList(),
+                Campos         = columnas.Select(c => (string)c.campo).ToList(),
+                Filas          = filasDict,
+                Firmas         = firmasPdf,
+            };
+
+            var pdfRelPath = _pdf.GenerarDocumento(pdfData);
+
+            await _db.ExecuteAsync(
+                "UPDATE dbo.bitacoras_documentos SET pdf_path = @PdfPath WHERE id = @Id",
+                new { PdfPath = pdfRelPath, Id = documentoId });
+
+            return pdfRelPath;
+        }
+
+        // ─── GET /bitacoras/pdf/{sedeId}/{filename} — servir archivos PDF ─
+        [HttpGet("pdf/{sedeId:int}/{filename}")]
+        [AllowAnonymous]
+        public IActionResult GetPdfFile(int sedeId, string filename)
+        {
+            if (filename.Contains("..") || filename.Contains('/') || filename.Contains('\\'))
+                return BadRequest();
+            var filePath = Path.Combine(_env.ContentRootPath, "bitacoras-pdfs", sedeId.ToString(), filename);
+            if (!System.IO.File.Exists(filePath))
+                return NotFound(new { message = "PDF no encontrado" });
+            return PhysicalFile(filePath, "application/pdf", filename);
+        }
+
         // ─── Helper: inicio del período actual ────────────────────────
         private static DateTime GetPeriodStart(string? periodicidad)
         {
@@ -1062,6 +1414,43 @@ namespace Alazan.API.Controllers
                 "mensual" => new DateTime(hoy.Year, hoy.Month, 1),
                 "anual"   => new DateTime(hoy.Year, 1, 1),
                 _         => hoy, // diaria
+            };
+        }
+
+        // ─── Helper: fin del período actual ──────────────────────────
+        private static DateTime GetPeriodEnd(string? periodicidad)
+        {
+            var hoy = DateTime.Today;
+            return (periodicidad ?? "Diaria").ToLower() switch
+            {
+                "semanal" => hoy.AddDays((6 - ((int)hoy.DayOfWeek + 6) % 7)), // domingo
+                "mensual" => new DateTime(hoy.Year, hoy.Month, DateTime.DaysInMonth(hoy.Year, hoy.Month)),
+                "anual"   => new DateTime(hoy.Year, 12, 31),
+                _         => hoy, // diaria
+            };
+        }
+
+        // ─── Helper: inicio/fin del período para una fecha dada ───────
+        private static DateTime GetPeriodStartFromDate(string? periodicidad, DateTime fecha)
+        {
+            return (periodicidad ?? "Diaria").ToLower() switch
+            {
+                "semanal" => fecha.AddDays(-(((int)fecha.DayOfWeek + 6) % 7)),
+                "mensual" => new DateTime(fecha.Year, fecha.Month, 1),
+                "anual"   => new DateTime(fecha.Year, 1, 1),
+                _         => fecha.Date,
+            };
+        }
+
+        private static DateTime GetPeriodEndFromDate(string? periodicidad, DateTime fecha)
+        {
+            var start = GetPeriodStartFromDate(periodicidad, fecha);
+            return (periodicidad ?? "Diaria").ToLower() switch
+            {
+                "semanal" => start.AddDays(6),
+                "mensual" => new DateTime(start.Year, start.Month, DateTime.DaysInMonth(start.Year, start.Month)),
+                "anual"   => new DateTime(start.Year, 12, 31),
+                _         => fecha.Date,
             };
         }
 
@@ -1121,8 +1510,10 @@ namespace Alazan.API.Controllers
 
     public class GenerarPdfRequest
     {
-        public string? GeneradoPor { get; set; }
-        public string? NombreSede  { get; set; }
+        public string? GeneradoPor    { get; set; }
+        public string? NombreSede     { get; set; }
+        public string? NombreEmpresa  { get; set; }
+        public string? Rfc            { get; set; }
     }
 
     public class SolicitarFirmasRequest
@@ -1141,6 +1532,7 @@ namespace Alazan.API.Controllers
         public string  CodigoBitacora { get; set; } = "";
         public int     SedeId         { get; set; }
         public string? Fecha          { get; set; }
+        public string? GeneradoPor    { get; set; }
     }
 
     public class FirmarDocumentoRequest

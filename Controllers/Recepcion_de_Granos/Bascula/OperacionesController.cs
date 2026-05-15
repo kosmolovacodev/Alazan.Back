@@ -18,12 +18,10 @@ namespace Alazan.API.Controllers
         }
 
         [HttpGet("bascula/pendientes")]
-        public async Task<IActionResult> GetBasculaPendientes()
+        public async Task<IActionResult> GetBasculaPendientes([FromQuery] int sedeId)
         {
-            // Nota: Asegúrate de que los nombres de las columnas en SQL coincidan 
-            // con las propiedades de tu clase BasculaRecepcion
-            var sql = "SELECT * FROM dbo.bascula_recepciones WHERE status = 'PENDIENTE_ANALISIS'";
-            var resultados = await _db.QueryAsync<BasculaRecepcion>(sql);
+            var sql = "SELECT * FROM dbo.bascula_recepciones WHERE status = 'PENDIENTE_ANALISIS' AND (@sedeId = 0 OR sede_id = @sedeId)";
+            var resultados = await _db.QueryAsync<BasculaRecepcion>(sql, new { sedeId });
             return Ok(resultados);
         }
 

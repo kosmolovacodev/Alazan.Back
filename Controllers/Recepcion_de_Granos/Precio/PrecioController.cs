@@ -13,12 +13,28 @@ namespace Alazan.API.Controllers
         private readonly IDbConnection _db;
         public PrecioController(IDbConnection db) => _db = db;
 
-        // GET: api/precio?sedeId=1
+        // GET: api/precio?sedeId=1&fecha=2026-05-07
+        // Si no se pasa fecha, muestra solo el día de hoy.
         [HttpGet]
-        public async Task<IActionResult> GetBoletasPrecios([FromQuery] int sedeId)
+        public async Task<IActionResult> GetBoletasPrecios(
+            [FromQuery] int     sedeId     = 0,
+            [FromQuery] string? fecha      = null,
+            [FromQuery] string? fechaDesde = null,
+            [FromQuery] string? fechaHasta = null)
         {
             try
             {
+                DateTime? diaFiltro = null;
+                DateTime? desde     = null;
+                DateTime? hasta     = null;
+
+                if (!string.IsNullOrWhiteSpace(fecha) && DateTime.TryParse(fecha, out var fd))
+                    diaFiltro = fd.Date;
+                else if (!string.IsNullOrWhiteSpace(fechaDesde) || !string.IsNullOrWhiteSpace(fechaHasta))
+                {
+                    if (DateTime.TryParse(fechaDesde, out var fd2)) desde = fd2.Date;
+                    if (DateTime.TryParse(fechaHasta, out var fh2)) hasta = fh2.Date.AddDays(1).AddTicks(-1);
+                }
                 var sql = @"
                     SELECT
                         bp.id,
@@ -70,11 +86,13 @@ namespace Alazan.API.Controllers
                     LEFT JOIN dbo.bascula_recepciones br ON b.bascula_id = br.id
                     LEFT JOIN dbo.analisis_calidad ac ON b.analisis_id = ac.id
                     WHERE (@sedeId = 0 OR bp.sede_id = @sedeId)
-                      --AND bp.estatus IN ('Sin Precio', 'Pendiente por Autorizar', 'Precio Autorizado', 'Precio Autorizado CG', 'Autorizado CC', 'Pendiente por Renegociar', 'Precio Rechazado')
                       AND bp.estatus IN ('Sin Precio','Precio Autorizado','En Renegociacion','Precio Rechazado')
+                      AND (@diaFiltro IS NULL OR CAST(bp.fecha_registro AS DATE) = @diaFiltro)
+                      AND (@desde IS NULL OR bp.fecha_registro >= @desde)
+                      AND (@hasta IS NULL OR bp.fecha_registro <= @hasta)
                     ORDER BY bp.fecha_registro ASC";
 
-                var boletas = await _db.QueryAsync<dynamic>(sql, new { sedeId });
+                var boletas = await _db.QueryAsync<dynamic>(sql, new { sedeId, diaFiltro = diaFiltro?.Date, desde, hasta });
                 return Ok(boletas);
             }
             catch (Exception ex)

@@ -12,14 +12,37 @@ namespace Alazan.API.Controllers
         private readonly IDbConnection _db;
         public BoletaController(IDbConnection db) => _db = db;
 
-        // GET: api/boleta?sedeId=1
-        // Obtiene todas las boletas para el módulo de Boleta (las que ya tienen precio autorizado)
+        // GET: api/boleta?sedeId=1&fecha=2026-05-07
+        // Obtiene las boletas del día actual por defecto.
         [HttpGet]
-        public async Task<IActionResult> GetBoletas([FromQuery] int sedeId, [FromQuery] string? estatus = null)
+        public async Task<IActionResult> GetBoletas(
+            [FromQuery] int     sedeId     = 0,
+            [FromQuery] string? estatus    = null,
+            [FromQuery] string? fecha      = null,
+            [FromQuery] string? fechaDesde = null,
+            [FromQuery] string? fechaHasta = null)
         {
             try
             {
-                var sql = @"
+                DateTime? diaFiltro = null;
+                DateTime? desde     = null;
+                DateTime? hasta     = null;
+
+                if (!string.IsNullOrWhiteSpace(fecha) && DateTime.TryParse(fecha, out var fd))
+                    diaFiltro = fd.Date;
+                else if (!string.IsNullOrWhiteSpace(fechaDesde) || !string.IsNullOrWhiteSpace(fechaHasta))
+                {
+                    if (DateTime.TryParse(fechaDesde, out var fd2)) desde = fd2.Date;
+                    if (DateTime.TryParse(fechaHasta, out var fh2)) hasta = fh2.Date.AddDays(1).AddTicks(-1);
+                }
+
+                var fechaWhere = diaFiltro.HasValue
+                    ? "AND CAST(b.created_at AS DATE) = @diaFiltro"
+                    : (desde.HasValue || hasta.HasValue
+                        ? "AND (@desde IS NULL OR b.created_at >= @desde) AND (@hasta IS NULL OR b.created_at <= @hasta)"
+                        : "");
+
+                var sql = $@"
                     SELECT
                         b.id,
                         b.folio AS noBoleta,
@@ -34,7 +57,6 @@ namespace Alazan.API.Controllers
                         b.peso_bruto AS pesoBruto,
                         b.tara,
                         b.peso_neto AS pesoNeto,
-                        --CAST(b.peso_neto / 1000.0 AS DECIMAL(10,3)) AS tonsAprox,
                         bp.tons_aprox as tonsAprox,
                         b.descuento_kg_ton AS descuento,
                         b.precio_mxn AS precio,
@@ -69,13 +91,13 @@ namespace Alazan.API.Controllers
                     LEFT JOIN dbo.bascula_recepciones br ON b.bascula_id = br.id
                     LEFT JOIN dbo.granos_catalogo g ON br.grano_id = g.id
                     LEFT JOIN dbo.boletas_precio bp ON b.id = bp.id
-
                     WHERE (@sedeId = 0 OR b.sede_id = @sedeId)
                       AND (@estatus IS NULL OR b.status = @estatus)
                       AND b.status NOT IN ('Pre-liquidado', 'Volcado Completado')
+                      {fechaWhere}
                     ORDER BY b.created_at DESC";
 
-                var boletas = await _db.QueryAsync<dynamic>(sql, new { sedeId, estatus });
+                var boletas = await _db.QueryAsync<dynamic>(sql, new { sedeId, estatus, diaFiltro = diaFiltro?.Date, desde, hasta });
                 return Ok(boletas);
             }
             catch (Exception ex)

@@ -16,12 +16,34 @@ namespace Alazan.API.Controllers
             _db = db;
         }
 
+        // Si no se pasa fecha ni rango, muestra solo el día de hoy.
         [HttpGet("registros")]
-        public async Task<IActionResult> GetRegistros([FromQuery] int sedeId)
+        public async Task<IActionResult> GetRegistros(
+            [FromQuery] int     sedeId     = 0,
+            [FromQuery] string? fecha      = null,
+            [FromQuery] string? fechaDesde = null,
+            [FromQuery] string? fechaHasta = null)
         {
             try
             {
-                var sql = @"SELECT
+                DateTime? diaFiltro = null;
+                DateTime? desde     = null;
+                DateTime? hasta     = null;
+
+                if (!string.IsNullOrWhiteSpace(fecha) && DateTime.TryParse(fecha, out var fd))
+                    diaFiltro = fd.Date;
+                else if (!string.IsNullOrWhiteSpace(fechaDesde) || !string.IsNullOrWhiteSpace(fechaHasta))
+                {
+                    if (DateTime.TryParse(fechaDesde, out var fd2)) desde = fd2.Date;
+                    if (DateTime.TryParse(fechaHasta, out var fh2)) hasta = fh2.Date.AddDays(1).AddTicks(-1);
+                }
+                var fechaWhere = diaFiltro.HasValue
+                    ? "AND CAST(b.fecha_hora AS DATE) = @diaFiltro"
+                    : (desde.HasValue || hasta.HasValue
+                        ? "AND (@desde IS NULL OR b.fecha_hora >= @desde) AND (@hasta IS NULL OR b.fecha_hora <= @hasta)"
+                        : "");
+
+                var sql = $@"SELECT
                             b.id,
                             b.ticket_numero AS ticket,
                             COALESCE(bol.folio, b.boleta_numero) AS boleta,
@@ -50,10 +72,11 @@ namespace Alazan.API.Controllers
                         LEFT JOIN dbo.granos_catalogo g ON b.grano_id = g.id
                         LEFT JOIN dbo.origenes_catalogo o ON b.origen_id = o.id
                         LEFT JOIN dbo.boletas bol ON bol.bascula_id = b.id
-                         WHERE (@sedeId = 0 OR b.sede_id = @sedeId)
-                         ORDER BY b.id asc ";
+                        WHERE (@sedeId = 0 OR b.sede_id = @sedeId)
+                        {fechaWhere}
+                        ORDER BY b.id ASC";
 
-                var registros = await _db.QueryAsync<object>(sql, new { sedeId });
+                var registros = await _db.QueryAsync<object>(sql, new { sedeId, diaFiltro = diaFiltro?.Date, desde, hasta });
                 return Ok(registros);
             }
             catch (Exception ex)

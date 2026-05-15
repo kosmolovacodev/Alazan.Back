@@ -22,6 +22,7 @@ namespace SistemaAlazan.Models
         public bool TieneDocumentos { get; set; }
         public bool TieneFacturaXml { get; set; }
         public long? UsuarioRegistroId { get; set; }
+        public int? OrdenesCompraId { get; set; }
     }
 
     public class ConfigFacturacionGeneral
@@ -121,6 +122,14 @@ namespace SistemaAlazan.Models
         public bool? CuentaBancariaDatosCoiniciden { get; set; }
         public string? OtroBase64 { get; set; }
         public string? OtroNombre { get; set; }
+    }
+
+    public class GuardarPdfFacturaRequest
+    {
+        public string[] Tickets { get; set; } = Array.Empty<string>();
+        public int SedeId { get; set; }
+        public string? PdfBase64 { get; set; }
+        public string? PdfNombre { get; set; }
     }
 
 public class RegistroOcrDto

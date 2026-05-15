@@ -466,13 +466,12 @@ namespace Alazan.API.Controllers
         [HttpGet("pendientes-analisis")]
         public async Task<IActionResult> GetPendientes(
             [FromQuery] int sedeId,
-            [FromQuery] string? estatus = null,
+            [FromQuery] string? estatus     = null,
             [FromQuery] string? fechaInicio = null,
-            [FromQuery] string? fechaFin = null)
+            [FromQuery] string? fechaFin    = null)
         {
             try
             {
-                // Si no se especifica estatus, solo traer PENDIENTE (comportamiento original)
                 var filtroEstatus = string.IsNullOrEmpty(estatus) ? "PENDIENTE" : estatus;
 
                 var sql = @"
@@ -483,14 +482,14 @@ namespace Alazan.API.Controllers
                 WHEN p.tipo_persona = 'Fisica' THEN p.nombre
                 ELSE NULL
                 END AS productor,
-                b.peso_bruto_kg, 
+                b.peso_bruto_kg,
                 b.status,
-                a.calibre, 
-                a.humedad, 
-                a.impurezas, 
+                a.calibre,
+                a.humedad,
+                a.impurezas,
                 a.r1_danado_insecto,
-                a.r2_arrugado, 
-                a.r2_manchado, 
+                a.r2_arrugado,
+                a.r2_manchado,
                 a.r2_quebrado,
                 a.datos_adicionales,
                 b.grano_id,
@@ -512,7 +511,7 @@ namespace Alazan.API.Controllers
                     sedeId,
                     filtroEstatus,
                     fechaInicio = string.IsNullOrEmpty(fechaInicio) ? null : fechaInicio,
-                    fechaFin = string.IsNullOrEmpty(fechaFin) ? null : fechaFin
+                    fechaFin    = string.IsNullOrEmpty(fechaFin)    ? null : fechaFin
                 });
                 return Ok(pendientes);
             }

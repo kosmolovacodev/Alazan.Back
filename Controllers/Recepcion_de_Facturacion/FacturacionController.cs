@@ -135,7 +135,7 @@ namespace Alazan.API.Controllers
                     LEFT JOIN dbo.preliquidaciones    pl ON fr.preliquidacion_id = pl.id
                     LEFT JOIN dbo.boletas             b  ON fr.boleta_id = b.id
                     LEFT JOIN dbo.bascula_recepciones br ON b.bascula_id = br.id
-                    LEFT JOIN dbo.productores         p  ON ISNULL(br.productor_id, fr.productor_id) = p.id
+                    LEFT JOIN dbo.productores         p  ON ISNULL(fr.productor_id, br.productor_id) = p.id
                     LEFT JOIN dbo.boletas_precio      bp ON bp.boleta_id = b.id
                     WHERE (@sedeId = 0 OR fr.sede_id = @sedeId)
                     ORDER BY fr.created_at DESC";
@@ -168,13 +168,13 @@ namespace Alazan.API.Controllers
                      preliquidacion_id, boleta_id, entrega_agrupada_id, fecha_recepcion,
                      rfc_productor, xml_factura_path, importe_factura, kg_total_entregados,
                      precio_promedio, tiene_documentos, tiene_factura_xml, usuario_registro_id,
-                     created_at, updated_at, sede_id)
+                     created_at, updated_at, sede_id, ordenes_compra_id)
                     VALUES
                     (@ProductorId, @UuidFiscal, @Serie, @Folio, @MontoTotal, @Status,
                      @PreliquidacionId, @BoletaId, @EntregaAgrupadaId, @FechaRecepcion,
                      @RfcProductor, @XmlFacturaPath, @ImporteFactura, @KgTotalEntregados,
                      @PrecioPromedio, @TieneDocumentos, @TieneFacturaXml, @UsuarioRegistroId,
-                     GETDATE(), GETDATE(), @SedeId);
+                     GETDATE(), GETDATE(), @SedeId, @OrdenesCompraId);
                     SELECT CAST(SCOPE_IDENTITY() as int);";
 
                 var id = await _db.QuerySingleAsync<int>(sql, dto);
@@ -433,13 +433,15 @@ namespace Alazan.API.Controllers
                         ISNULL(fr.tiene_factura_xml, 0)                                 AS tieneFacturaXML,
                         br.grano_id                                                     AS granoId,
                         ac.datos_adicionales                                            AS analisisDatosAdicionales,
-                        TRY_CAST(JSON_VALUE(ac.datos_adicionales, '$.exportacion') AS DECIMAL(10,2)) AS exportacion
+                        TRY_CAST(JSON_VALUE(ac.datos_adicionales, '$.exportacion') AS DECIMAL(10,2)) AS exportacion,
+                        ISNULL(fr.productor_id, br.productor_id)                        AS productorId,
+                        fr.sede_id                                                      AS sedeId
 
                     FROM dbo.facturacion_recepciones fr
                     LEFT JOIN dbo.preliquidaciones    pl  ON fr.preliquidacion_id = pl.id
                     LEFT JOIN dbo.boletas             b   ON fr.boleta_id = b.id
                     LEFT JOIN dbo.bascula_recepciones br  ON b.bascula_id = br.id
-                    LEFT JOIN dbo.productores         p   ON ISNULL(br.productor_id, fr.productor_id) = p.id
+                    LEFT JOIN dbo.productores         p   ON ISNULL(fr.productor_id, br.productor_id) = p.id
                     LEFT JOIN dbo.boletas_precio      bp  ON bp.boleta_id = b.id
                     LEFT JOIN dbo.analisis_calidad    ac  ON b.analisis_id = ac.id
                     LEFT JOIN dbo.granos_catalogo     g   ON br.grano_id = g.id
@@ -527,6 +529,57 @@ namespace Alazan.API.Controllers
             catch (Exception ex)
             {
                 return StatusCode(500, new { message = "Error al guardar XML", detail = ex.Message });
+            }
+        }
+
+        // ═══════════════════════════════════════════════
+        //  POST /facturacion/guardar-factura-pdf
+        //  Guarda el PDF de la factura digital en datos_adicionales
+        // ═══════════════════════════════════════════════
+        [HttpPost("guardar-factura-pdf")]
+        public async Task<IActionResult> GuardarFacturaPdf([FromBody] GuardarPdfFacturaRequest dto)
+        {
+            try
+            {
+                if (dto.Tickets.Length == 0 || string.IsNullOrEmpty(dto.PdfBase64))
+                    return BadRequest(new { message = "Tickets y PdfBase64 son requeridos" });
+
+                await EnsurarColumnaDatosAdicionales();
+
+                var existingJson = await _db.QueryFirstOrDefaultAsync<string>(@"
+                    SELECT TOP 1 fr.datos_adicionales
+                    FROM facturacion_recepciones fr
+                    INNER JOIN boletas b ON fr.boleta_id = b.id
+                    WHERE b.ticket_numero = @ticket",
+                    new { ticket = dto.Tickets[0] });
+
+                var root = string.IsNullOrWhiteSpace(existingJson)
+                    ? new JsonObject()
+                    : JsonNode.Parse(existingJson)?.AsObject() ?? new JsonObject();
+
+                root["factura_pdf"] = JsonSerializer.SerializeToNode(new
+                {
+                    nombre       = dto.PdfNombre ?? "factura.pdf",
+                    base64       = dto.PdfBase64,
+                    fechaGuardado = DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ss")
+                });
+
+                var mergedJson = root.ToJsonString();
+
+                await _db.ExecuteAsync(@"
+                    UPDATE fr
+                    SET fr.datos_adicionales = @MergedJson,
+                        fr.updated_at        = GETDATE()
+                    FROM facturacion_recepciones fr
+                    WHERE fr.ticket_numero IN @Tickets
+                      AND (@SedeId = 0 OR fr.sede_id = @SedeId)",
+                    new { dto.Tickets, MergedJson = mergedJson, dto.SedeId });
+
+                return Ok(new { success = true });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { message = "Error al guardar PDF", detail = ex.Message });
             }
         }
 
@@ -668,7 +721,7 @@ namespace Alazan.API.Controllers
                     LEFT JOIN dbo.preliquidaciones    pl ON fr.preliquidacion_id = pl.id
                     LEFT JOIN dbo.boletas             b  ON fr.boleta_id = b.id
                     LEFT JOIN dbo.bascula_recepciones br ON b.bascula_id = br.id
-                    LEFT JOIN dbo.productores         p  ON ISNULL(br.productor_id, fr.productor_id) = p.id
+                    LEFT JOIN dbo.productores         p  ON ISNULL(fr.productor_id, br.productor_id) = p.id
                     LEFT JOIN dbo.boletas_precio      bp ON bp.boleta_id = b.id
                     WHERE (@sedeId = 0 OR fr.sede_id = @sedeId)
                     ORDER BY fr.created_at DESC";
@@ -900,6 +953,83 @@ namespace Alazan.API.Controllers
                 return StatusCode(500, new { message = "Error: " + ex.Message });
             }
         }
+
+        // ═══════════════════════════════════════════════
+        //  GET /facturacion/oc-vigentes/{productorId}
+        //  Lee desde mba3_ordenes_compra (ya sincronizado cada 24h)
+        //  en lugar de llamar MBA3 en cada request.
+        // ═══════════════════════════════════════════════
+        [HttpGet("oc-vigentes/{productorId}")]
+        public async Task<IActionResult> GetOcVigentes(long productorId)
+        {
+            try
+            {
+                var tieneCodigo = await _db.ExecuteScalarAsync<int>(
+                    "SELECT COUNT(1) FROM dbo.productores WHERE id = @productorId AND activo = 1 AND codigo_proveedor IS NOT NULL",
+                    new { productorId });
+
+                if (tieneCodigo == 0)
+                    return Ok(new { ocs = Array.Empty<object>(), aviso = "El productor no tiene código de proveedor MBA3 asignado" });
+
+                var ocs = await _db.QueryAsync<dynamic>(@"
+                    SELECT
+                        oc.id                   AS ocId,
+                        oc.contrato_id          AS contratoId,
+                        oc.contrato_id_corp     AS contratoIdCorp,
+                        oc.fecha_pedido         AS fechaPedido,
+                        oc.fecha_entrega        AS fechaEntrega,
+                        oc.inv_amount           AS importe,
+                        oc.currency_type        AS moneda,
+                        oc.status               AS status,
+                        oc.referencia_general   AS referencia,
+                        oc.ultima_sync          AS ultimaSync,
+                        TRY_CAST(JSON_VALUE(oc.datos_json, '$.Total_unidades_Prim_unidad') AS DECIMAL(18,3)) AS kilos,
+                        oci.id                  AS ordenCompraInternaId,
+                        oci.folio               AS folioInterno,
+                        oci.preliquidacion_id   AS preliquidacionId
+                    FROM dbo.mba3_ordenes_compra oc
+                    INNER JOIN dbo.productores p
+                        ON TRY_CAST(p.codigo_proveedor AS BIGINT) = TRY_CAST(oc.client_id AS BIGINT)
+                        AND p.activo = 1
+                    LEFT JOIN dbo.ordenes_compra oci ON oci.activo = 1
+                        AND (
+                            -- Match explícito: ya fue vinculada manualmente
+                            oci.folio_mba3 = oc.contrato_id_corp
+                            OR
+                            -- Match automático: misma productor + peso_neto_kg = Total_unidades_Prim_unidad
+                            (
+                                oci.folio_mba3 IS NULL
+                                AND oci.productor_id = p.id
+                                AND EXISTS (
+                                    SELECT 1 FROM dbo.preliquidaciones pl
+                                    WHERE pl.id = oci.preliquidacion_id
+                                      AND pl.peso_neto_kg =
+                                          TRY_CAST(JSON_VALUE(oc.datos_json, '$.Total_unidades_Prim_unidad') AS DECIMAL(18,3))
+                                )
+                            )
+                        )
+                    WHERE p.id = @productorId
+                    ORDER BY oc.fecha_pedido DESC",
+                    new { productorId });
+
+                var ultimaSync = await _db.ExecuteScalarAsync<DateTime?>(@"
+                    SELECT MAX(oc.ultima_sync)
+                    FROM dbo.mba3_ordenes_compra oc
+                    INNER JOIN dbo.productores p
+                        ON TRY_CAST(p.codigo_proveedor AS BIGINT) = TRY_CAST(oc.client_id AS BIGINT)
+                        AND p.activo = 1
+                    WHERE p.id = @productorId",
+                    new { productorId });
+
+                return Ok(new { ocs, ultima_sync = ultimaSync });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error al consultar OCs para productor {Id}", productorId);
+                return StatusCode(500, new { message = ex.Message });
+            }
+        }
+
     }
 
     public class ValidacionIdentidadRequest

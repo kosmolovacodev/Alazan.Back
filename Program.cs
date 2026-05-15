@@ -66,6 +66,11 @@ builder.Services.AddHostedService<SnapshotInventarioService>();
 // 6. SERVICIO EN SEGUNDO PLANO: Sincronización MBA3 → tabla local productores (cada 60 min)
 builder.Services.AddHostedService<SincronizacionMba3ProductoresService>();
 
+// 7. SERVICIO EN SEGUNDO PLANO: Sincronización OC MBA3 → mba3_ordenes_compra (cada 60 min)
+// Registrado como Singleton para poder inyectarlo en el controller (trigger manual)
+builder.Services.AddSingleton<SincronizacionOrdenesCompraService>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<SincronizacionOrdenesCompraService>());
+
 // 7. SERVICIOS PARA FIRMA DIGITAL DE BITÁCORAS
 QuestPDF.Settings.License = LicenseType.Community;
 builder.Services.AddSingleton<EmailService>();

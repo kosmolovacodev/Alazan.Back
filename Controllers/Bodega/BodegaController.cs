@@ -39,6 +39,101 @@ namespace Alazan.API.Controllers
             return Ok(new { bodegas, cuadrantes, presentaciones, tiposCostal, subproductos });
         }
 
+        // ─── GET /bodega/cuadrantes-en-uso?sedeId=1&excludeOrdenId=0 ────
+        // Pares bodega+cuadrante ya ocupados en asignaciones activas (Tarea 18.2)
+        [HttpGet("cuadrantes-en-uso")]
+        public async Task<IActionResult> GetCuadrantesEnUso(
+            [FromQuery] int sedeId,
+            [FromQuery] int excludeOrdenId = 0)
+        {
+            var pares = await _db.QueryAsync(@"
+                SELECT bd.bodega_id AS bodegaId, bd.cuadrante_id AS cuadranteId
+                FROM dbo.bodega_asignacion_detalle bd
+                JOIN dbo.bodega_asignacion_items bi ON bi.id = bd.item_id
+                JOIN dbo.bodega_asignaciones ba     ON ba.id  = bi.asignacion_id
+                WHERE ba.sede_id = @sedeId
+                  AND bi.tipo = 'producto'
+                  AND ba.status_asignacion NOT IN ('Terminado')
+                  AND (@excludeOrdenId = 0 OR ba.orden_id <> @excludeOrdenId)",
+                new { sedeId, excludeOrdenId });
+            return Ok(pares);
+        }
+
+        // ─── PATCH /bodega/asignacion/{ordenId}/autosave ─────────────
+        // Guarda items sin cambiar el status_asignacion (Tarea 18.2)
+        [HttpPatch("asignacion/{ordenId}/autosave")]
+        public async Task<IActionResult> AutosaveAsignacion(int ordenId, [FromBody] BodegaAsignacionRequest dto)
+        {
+            try
+            {
+                var asignacionId = await _db.QueryFirstOrDefaultAsync<int?>(
+                    "SELECT id FROM dbo.bodega_asignaciones WHERE orden_id = @OrdenId",
+                    new { OrdenId = ordenId });
+
+                if (asignacionId == null)
+                {
+                    asignacionId = await _db.QuerySingleAsync<int>(
+                        @"INSERT INTO dbo.bodega_asignaciones (orden_id, sede_id, fecha, status_asignacion)
+                          VALUES (@OrdenId, @SedeId, @Fecha, 'Borrador');
+                          SELECT CAST(SCOPE_IDENTITY() AS INT);",
+                        new {
+                            dto.OrdenId, dto.SedeId,
+                            Fecha = string.IsNullOrEmpty(dto.Fecha) ? (object)DBNull.Value : dto.Fecha,
+                        });
+                }
+                else
+                {
+                    await _db.ExecuteAsync(
+                        @"UPDATE dbo.bodega_asignaciones
+                          SET fecha = @Fecha, fecha_actualizacion = SYSDATETIMEOFFSET()
+                          WHERE id = @Id",
+                        new {
+                            Fecha = string.IsNullOrEmpty(dto.Fecha) ? (object)DBNull.Value : dto.Fecha,
+                            Id    = asignacionId
+                        });
+
+                    await _db.ExecuteAsync(
+                        @"DELETE d FROM dbo.bodega_asignacion_detalle d
+                          JOIN dbo.bodega_asignacion_items i ON i.id = d.item_id
+                          WHERE i.asignacion_id = @AsignacionId",
+                        new { AsignacionId = asignacionId });
+                    await _db.ExecuteAsync(
+                        "DELETE FROM dbo.bodega_asignacion_items WHERE asignacion_id = @AsignacionId",
+                        new { AsignacionId = asignacionId });
+                }
+
+                int orden = 0;
+                foreach (var item in dto.Items)
+                {
+                    var itemId = await _db.QuerySingleAsync<int>(
+                        @"INSERT INTO dbo.bodega_asignacion_items
+                            (asignacion_id, tipo, nombre, presentacion_id, tipo_costal_id, cantidad_total, orden_item)
+                          VALUES (@AsignacionId, @Tipo, @Nombre, @PresentacionId, @TipoCostalId, @CantidadTotal, @Orden);
+                          SELECT CAST(SCOPE_IDENTITY() AS INT);",
+                        new {
+                            AsignacionId  = asignacionId, item.Tipo, item.Nombre,
+                            PresentacionId = item.PresentacionId.HasValue ? (object)item.PresentacionId : DBNull.Value,
+                            TipoCostalId   = item.TipoCostalId.HasValue   ? (object)item.TipoCostalId   : DBNull.Value,
+                            CantidadTotal  = item.CantidadTotal, Orden = orden++
+                        });
+
+                    foreach (var det in item.Detalle.Where(d => d.BodegaId > 0 && d.CuadranteId > 0))
+                    {
+                        await _db.ExecuteAsync(
+                            @"INSERT INTO dbo.bodega_asignacion_detalle (item_id, bodega_id, cuadrante_id, cantidad)
+                              VALUES (@ItemId, @BodegaId, @CuadranteId, @Cantidad)",
+                            new { ItemId = itemId, det.BodegaId, det.CuadranteId, det.Cantidad });
+                    }
+                }
+
+                return Ok(new { message = "Borrador guardado", asignacionId });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { message = "Error en autoguardado", error = ex.Message });
+            }
+        }
+
         // ─── GET /bodega/historial?sedeId=1 ──────────────────────────────
         // Todas las órdenes de producción con su estado de bodega
         [HttpGet("historial")]
@@ -47,7 +142,7 @@ namespace Alazan.API.Controllers
             var rows = await _db.QueryAsync(
                 @"SELECT
                     o.id                                                AS ordenId,
-                    o.no_orden                                          AS folio,
+                    ISNULL(o.folio, o.no_orden)                         AS folio,
                     CONVERT(DATE, o.fecha_orden)                        AS fecha,
                     o.status                                            AS statusProduccion,
                     o.calibre_tipo                                      AS calibre,
@@ -57,6 +152,15 @@ namespace Alazan.API.Controllers
                          WHERE pt.orden_id = o.id),
                         ''
                     )                                                   AS producto,
+                    ISNULL(
+                        (SELECT SUM(pt.total_mp_suministrada)
+                         FROM dbo.produccion_trenes pt
+                         WHERE pt.orden_id = o.id),
+                        0
+                    )                                                   AS totalMpSuministrada,
+                    (SELECT TOP 1 pt.presentacion_id
+                     FROM dbo.produccion_trenes pt
+                     WHERE pt.orden_id = o.id)                          AS presentacionId,
                     ISNULL(ba.id, 0)                                    AS asignacionId,
                     ba.fecha                                            AS fechaAsignacion,
                     ISNULL(ba.status_asignacion, 'No Asignado')         AS statusAsignacion,
@@ -165,6 +269,12 @@ namespace Alazan.API.Controllers
                     "SELECT id FROM dbo.bodega_asignaciones WHERE orden_id = @OrdenId",
                     new { dto.OrdenId });
 
+                // Si la OPr está terminada, el estatus de bodega también debe ser "Terminado"
+                var statusOrden = await _db.QueryFirstOrDefaultAsync<string>(
+                    "SELECT status FROM dbo.ordenesproduccion WHERE id = @OrdenId",
+                    new { dto.OrdenId });
+                var statusFinal = statusOrden == "Terminado" ? "Terminado" : (dto.StatusAsignacion ?? "Asignado");
+
                 if (asignacionId == null)
                 {
                     // Crear nueva
@@ -176,7 +286,7 @@ namespace Alazan.API.Controllers
                         new {
                             dto.OrdenId, dto.SedeId,
                             Fecha  = string.IsNullOrEmpty(dto.Fecha) ? (object)DBNull.Value : dto.Fecha,
-                            Status = dto.StatusAsignacion ?? "Asignado"
+                            Status = statusFinal
                         });
                 }
                 else
@@ -189,7 +299,7 @@ namespace Alazan.API.Controllers
                           WHERE id = @Id",
                         new {
                             Fecha  = string.IsNullOrEmpty(dto.Fecha) ? (object)DBNull.Value : dto.Fecha,
-                            Status = dto.StatusAsignacion ?? "Asignado",
+                            Status = statusFinal,
                             Id     = asignacionId
                         });
 

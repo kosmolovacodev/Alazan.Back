@@ -77,13 +77,27 @@ namespace Alazan.API.Controllers
         }
 
         // ─── ÓRDENES DE PRODUCCIÓN ──────────────────────────────────────
+        [HttpGet("trenes-en-uso")]
+        public async Task<IActionResult> GetTrenesEnUso([FromQuery] int sedeId)
+        {
+            var trenIds = await _db.QueryAsync<int>(@"
+                SELECT DISTINCT pt.tren_id
+                FROM dbo.produccion_trenes pt
+                INNER JOIN dbo.ordenesproduccion o ON o.id = pt.orden_id
+                WHERE o.sede_id = @sedeId
+                  AND o.status NOT IN ('Resultado Registrado', 'Cancelado')",
+                new { sedeId });
+            return Ok(trenIds);
+        }
+
         [HttpGet("ordenes")]
         public async Task<IActionResult> GetOrdenes([FromQuery] int sedeId)
         {
             var ordenes = await _db.QueryAsync(
                 @"SELECT
                     o.id,
-                    o.no_orden        AS noOrden,
+                    ISNULL(o.folio, o.no_orden) AS noOrden,
+                    o.folio,
                     o.fecha_orden     AS fechaOrden,
                     o.status,
                     o.calibre_tipo    AS calibreTipo,
@@ -115,8 +129,8 @@ namespace Alazan.API.Controllers
         public async Task<IActionResult> GetOrden(int id)
         {
             var orden = await _db.QueryFirstOrDefaultAsync(
-                @"SELECT id, no_orden AS noOrden, sede_id AS sedeId, fecha_orden AS fechaOrden,
-                         calibre_tipo AS calibreTipo,
+                @"SELECT id, ISNULL(folio, no_orden) AS noOrden, folio, sede_id AS sedeId,
+                         fecha_orden AS fechaOrden, calibre_tipo AS calibreTipo,
                          status, justificacion_edicion AS justificacionEdicion,
                          fecha_creacion AS fechaCreacion
                   FROM dbo.ordenesproduccion WHERE id = @id",
@@ -160,6 +174,11 @@ namespace Alazan.API.Controllers
         {
             try
             {
+                // Tarea 13: validar total MP ≤ 50 toneladas
+                var totalMp = dto.Trenes.Sum(t => t.TotalMpSuministrada ?? 0);
+                if (totalMp > 50)
+                    return BadRequest(new { message = $"Total MP Suministrada ({totalMp:0.##} Ton) excede el límite de 50 Ton" });
+
                 if (_db.State == ConnectionState.Closed) _db.Open();
                 using var trans = _db.BeginTransaction();
 
@@ -167,8 +186,21 @@ namespace Alazan.API.Controllers
                     @"INSERT INTO dbo.ordenesproduccion (no_orden, sede_id, fecha_orden, calibre_tipo)
                       VALUES (@NoOrden, @SedeId, @FechaOrden, @CalibreTipo);
                       SELECT CAST(SCOPE_IDENTITY() AS INT);",
-                    new { NoOrden = dto.NoOrden, SedeId = sedeId, FechaOrden = dto.FechaOrden, CalibreTipo = dto.CalibreTipo },
+                    new { NoOrden = dto.NoOrden ?? "", SedeId = sedeId, FechaOrden = dto.FechaOrden, CalibreTipo = dto.CalibreTipo },
                     transaction: trans);
+
+                // Tarea 10: generar folio OP-YYYY-NNNN secuencial por año y sede
+                var anio = DateTime.Today.Year;
+                var siguienteNum = await _db.ExecuteScalarAsync<int>(@"
+                    SELECT ISNULL(MAX(CAST(RIGHT(p.folio, 4) AS INT)), 0) + 1
+                    FROM dbo.ordenesproduccion p
+                    WHERE YEAR(p.fecha_creacion) = @anio AND p.sede_id = @sedeId
+                      AND p.folio IS NOT NULL AND p.id <> @ordenId",
+                    new { anio, sedeId, ordenId }, transaction: trans);
+                var folio = $"OP-{anio}-{siguienteNum:D4}";
+                await _db.ExecuteAsync(
+                    "UPDATE dbo.ordenesproduccion SET folio = @folio, no_orden = @folio WHERE id = @ordenId",
+                    new { folio, ordenId }, transaction: trans);
 
                 foreach (var tren in dto.Trenes)
                 {
@@ -197,7 +229,7 @@ namespace Alazan.API.Controllers
                 }
 
                 trans.Commit();
-                return Ok(new { id = ordenId, message = "Orden creada exitosamente" });
+                return Ok(new { id = ordenId, folio, message = "Orden creada exitosamente" });
             }
             catch (Exception ex)
             {
@@ -212,6 +244,11 @@ namespace Alazan.API.Controllers
             {
                 if (string.IsNullOrWhiteSpace(dto.JustificacionEdicion))
                     return BadRequest(new { message = "La justificación de edición es obligatoria" });
+
+                // Tarea 13: validar total MP ≤ 50 toneladas
+                var totalMp = dto.Trenes.Sum(t => t.TotalMpSuministrada ?? 0);
+                if (totalMp > 50)
+                    return BadRequest(new { message = $"Total MP Suministrada ({totalMp:0.##} Ton) excede el límite de 50 Ton" });
 
                 if (_db.State == ConnectionState.Closed) _db.Open();
                 using var trans = _db.BeginTransaction();
@@ -295,7 +332,8 @@ namespace Alazan.API.Controllers
                           SET fecha_inicio = @FechaInicio, hora_inicio = @HoraInicio,
                               fecha_fin = @FechaFin, hora_fin = @HoraFin,
                               producto_clasificado = @ProductoClasificado,
-                              subproducto = @Subproducto, desecho = @Desecho
+                              subproducto = @Subproducto, desecho = @Desecho,
+                              fecha_resultado = GETDATE()
                           WHERE orden_id = @OrdenId",
                         new
                         {
@@ -309,10 +347,10 @@ namespace Alazan.API.Controllers
                     await _db.ExecuteAsync(
                         @"INSERT INTO dbo.resultado_produccion
                             (orden_id, fecha_inicio, hora_inicio, fecha_fin, hora_fin,
-                             producto_clasificado, subproducto, desecho)
+                             producto_clasificado, subproducto, desecho, fecha_resultado)
                           VALUES
                             (@OrdenId, @FechaInicio, @HoraInicio, @FechaFin, @HoraFin,
-                             @ProductoClasificado, @Subproducto, @Desecho)",
+                             @ProductoClasificado, @Subproducto, @Desecho, GETDATE())",
                         new
                         {
                             dto.OrdenId, dto.FechaInicio, dto.HoraInicio, dto.FechaFin, dto.HoraFin,
@@ -333,7 +371,53 @@ namespace Alazan.API.Controllers
             }
         }
 
+        // GET /produccion/siguiente-folio — preview del próximo folio antes de crear
+        [HttpGet("siguiente-folio")]
+        public async Task<IActionResult> GetSiguienteFolio([FromQuery] int sedeId)
+        {
+            var anio = DateTime.Today.Year;
+            var siguienteNum = await _db.ExecuteScalarAsync<int>(@"
+                SELECT ISNULL(MAX(CAST(RIGHT(p.folio, 4) AS INT)), 0) + 1
+                FROM dbo.ordenesproduccion p
+                WHERE YEAR(p.fecha_creacion) = @anio AND p.sede_id = @sedeId
+                  AND p.folio IS NOT NULL",
+                new { anio, sedeId });
+            return Ok(new { folio = $"OP-{anio}-{siguienteNum:D4}" });
+        }
+
         // ─── ANÁLISIS DE CALIDAD ────────────────────────────────────────
+        // GET /produccion/analisis/orden-pendiente — primera OPr en estado Pendiente (Tarea 16)
+        // Debe declararse ANTES de analisis/{id} para ganar la ruta literal
+        [HttpGet("analisis/orden-pendiente")]
+        public async Task<IActionResult> GetOrdenPendiente([FromQuery] int sedeId)
+        {
+            var orden = await _db.QueryFirstOrDefaultAsync(@"
+                SELECT TOP 1
+                    o.id,
+                    ISNULL(o.folio, o.no_orden) AS folio,
+                    CONVERT(varchar(10), o.fecha_orden, 23) AS fechaOrden,
+                    (SELECT TOP 1 pt.producto
+                     FROM dbo.produccion_trenes pt WHERE pt.orden_id = o.id) AS producto,
+                    (SELECT TOP 1 ctp.nombre
+                     FROM dbo.produccion_trenes pt
+                     JOIN dbo.cat_trenes_produccion ctp ON ctp.id = pt.tren_id
+                     WHERE pt.orden_id = o.id) AS trenNombre,
+                    (SELECT TOP 1 pres.nombre
+                     FROM dbo.produccion_trenes pt
+                     JOIN dbo.cat_presentacion_produccion pres ON pres.id = pt.presentacion_id
+                     WHERE pt.orden_id = o.id) AS presentacion,
+                    (SELECT TOP 1 pt.origen
+                     FROM dbo.produccion_trenes pt
+                     WHERE pt.orden_id = o.id) AS silo
+                FROM dbo.ordenesproduccion o
+                WHERE o.sede_id = @sedeId AND o.status = 'Pendiente'
+                ORDER BY o.fecha_creacion ASC",
+                new { sedeId });
+
+            if (orden == null) return NotFound(new { message = "No hay órdenes pendientes" });
+            return Ok(orden);
+        }
+
         [HttpGet("analisis")]
         public async Task<IActionResult> GetAnalisis([FromQuery] int sedeId)
         {
@@ -347,6 +431,26 @@ namespace Alazan.API.Controllers
                   ORDER BY acp.fecha_registro DESC",
                 new { sedeId });
             return Ok(lista);
+        }
+
+        // PATCH /produccion/analisis/{id}/autosave — guarda datos SIN finalizar (Tarea 18)
+        [HttpPatch("analisis/{id}/autosave")]
+        public async Task<IActionResult> AutosaveAnalisis(int id, [FromBody] AnalisisAutosaveRequest dto)
+        {
+            try
+            {
+                await _db.ExecuteAsync(
+                    @"UPDATE dbo.analisiscalidad_proceso
+                      SET detallado = @Detallado, parrillas = @Parrillas,
+                          fecha_actualizacion = SYSDATETIMEOFFSET()
+                      WHERE id = @Id AND ISNULL(finalizado, 0) = 0",
+                    new { dto.Detallado, dto.Parrillas, Id = id });
+                return Ok(new { message = "Autoguardado" });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { message = ex.Message });
+            }
         }
 
         [HttpPost("analisis/{id}/finalizar")]
@@ -474,6 +578,12 @@ namespace Alazan.API.Controllers
             public string? Proceso { get; set; }
             public string? Silo { get; set; }
             public string? Variedad { get; set; }
+            public string? Detallado { get; set; }
+            public string? Parrillas { get; set; }
+        }
+
+        public class AnalisisAutosaveRequest
+        {
             public string? Detallado { get; set; }
             public string? Parrillas { get; set; }
         }

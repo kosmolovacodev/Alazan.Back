@@ -219,6 +219,8 @@ namespace Alazan.API.Controllers
             [FromQuery] int pageSize = 20,
             [FromQuery] string search = "")
         {
+            if (pageSize > 500) pageSize = 500;
+
             const string sedeFilter = "(@sedeId = 0 OR p.sede_id = @sedeId OR p.sede_id = 0 OR p.sede_id IS NULL)";
             var searchFilter = string.IsNullOrWhiteSpace(search)
                 ? ""

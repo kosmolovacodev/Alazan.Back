@@ -15,13 +15,36 @@ namespace Alazan.API.Controllers
         private readonly IDbConnection _db;
         public PreliquidacionController(IDbConnection db) => _db = db;
 
-        // GET: api/preliquidacion?sedeId=1
+        // GET: api/preliquidacion?sedeId=1&fecha=2026-05-07
+        // Si no se pasa fecha ni rango, muestra solo el día de hoy.
         [HttpGet]
-        public async Task<IActionResult> GetRegistros([FromQuery] int sedeId)
+        public async Task<IActionResult> GetRegistros(
+            [FromQuery] int     sedeId     = 0,
+            [FromQuery] string? fecha      = null,
+            [FromQuery] string? fechaDesde = null,
+            [FromQuery] string? fechaHasta = null)
         {
             try
             {
-                var sql = @"
+                DateTime? diaFiltro = null;
+                DateTime? desde     = null;
+                DateTime? hasta     = null;
+
+                if (!string.IsNullOrWhiteSpace(fecha) && DateTime.TryParse(fecha, out var fd))
+                    diaFiltro = fd.Date;
+                else if (!string.IsNullOrWhiteSpace(fechaDesde) || !string.IsNullOrWhiteSpace(fechaHasta))
+                {
+                    if (DateTime.TryParse(fechaDesde, out var fd2)) desde = fd2.Date;
+                    if (DateTime.TryParse(fechaHasta, out var fh2)) hasta = fh2.Date.AddDays(1).AddTicks(-1);
+                }
+
+                var fechaWhere = diaFiltro.HasValue
+                    ? "AND CAST(b.created_at AS DATE) = @diaFiltro"
+                    : (desde.HasValue || hasta.HasValue
+                        ? "AND (@desde IS NULL OR b.created_at >= @desde) AND (@hasta IS NULL OR b.created_at <= @hasta)"
+                        : "");
+
+                var sql = $@"
                     SELECT
                         ROW_NUMBER() OVER (ORDER BY b.created_at ASC) AS numero,
                         b.id AS boletaId,
@@ -61,9 +84,10 @@ namespace Alazan.API.Controllers
                     LEFT JOIN dbo.preliquidaciones p ON p.boleta_id = b.id
                     WHERE (@sedeId = 0 OR b.sede_id = @sedeId)
                       AND v.status IN ('Con Silo Asignado', 'Con Almacen Asignado')
+                      {fechaWhere}
                     ORDER BY b.created_at DESC";
 
-                var registros = await _db.QueryAsync<dynamic>(sql, new { sedeId });
+                var registros = await _db.QueryAsync<dynamic>(sql, new { sedeId, diaFiltro = diaFiltro?.Date, desde, hasta });
                 return Ok(registros);
             }
             catch (Exception ex)
@@ -72,13 +96,35 @@ namespace Alazan.API.Controllers
             }
         }
 
-        // GET: api/preliquidacion/resumen?sedeId=1
+        // GET: api/preliquidacion/resumen?sedeId=1&fecha=2026-05-07
         [HttpGet("resumen")]
-        public async Task<IActionResult> GetResumen([FromQuery] int sedeId)
+        public async Task<IActionResult> GetResumen(
+            [FromQuery] int     sedeId     = 0,
+            [FromQuery] string? fecha      = null,
+            [FromQuery] string? fechaDesde = null,
+            [FromQuery] string? fechaHasta = null)
         {
             try
             {
-                var sql = @"
+                DateTime? diaFiltro = null;
+                DateTime? desde     = null;
+                DateTime? hasta     = null;
+
+                if (!string.IsNullOrWhiteSpace(fecha) && DateTime.TryParse(fecha, out var fd))
+                    diaFiltro = fd.Date;
+                else if (!string.IsNullOrWhiteSpace(fechaDesde) || !string.IsNullOrWhiteSpace(fechaHasta))
+                {
+                    if (DateTime.TryParse(fechaDesde, out var fd2)) desde = fd2.Date;
+                    if (DateTime.TryParse(fechaHasta, out var fh2)) hasta = fh2.Date.AddDays(1).AddTicks(-1);
+                }
+
+                var fechaWhere = diaFiltro.HasValue
+                    ? "AND CAST(b.created_at AS DATE) = @diaFiltro"
+                    : (desde.HasValue || hasta.HasValue
+                        ? "AND (@desde IS NULL OR b.created_at >= @desde) AND (@hasta IS NULL OR b.created_at <= @hasta)"
+                        : "");
+
+                var sql = $@"
                     SELECT
                         COUNT(*) AS totalDelDia,
                         SUM(CASE WHEN p.id IS NOT NULL THEN 1 ELSE 0 END) AS conPreliquidacion,
@@ -88,9 +134,10 @@ namespace Alazan.API.Controllers
                     INNER JOIN dbo.volcado_bodega v ON b.bascula_id = v.bascula_id
                     LEFT JOIN dbo.preliquidaciones p ON p.boleta_id = b.id
                     WHERE (@sedeId = 0 OR b.sede_id = @sedeId)
-                    AND v.status IN ('Con Silo Asignado', 'Con Almacen Asignado')";
+                    AND v.status IN ('Con Silo Asignado', 'Con Almacen Asignado')
+                    {fechaWhere}";
 
-                var resumen = await _db.QueryFirstOrDefaultAsync<dynamic>(sql, new { sedeId });
+                var resumen = await _db.QueryFirstOrDefaultAsync<dynamic>(sql, new { sedeId, diaFiltro = diaFiltro?.Date, desde, hasta });
                 return Ok(resumen);
             }
             catch (Exception ex)
@@ -253,6 +300,43 @@ namespace Alazan.API.Controllers
                     dto.PesoTara, dto.Rt, dto.Observaciones, dto.BoletaId,
                     DivisionesJson = divisionesJson
                 });
+
+                // 1b. Generar folio OC y crear registro en ordenes_compra
+                var nuevoPreliqId = await _db.ExecuteScalarAsync<long>(
+                    "SELECT TOP 1 id FROM dbo.preliquidaciones WHERE boleta_id = @BoletaId ORDER BY id DESC",
+                    new { dto.BoletaId });
+
+                if (nuevoPreliqId > 0)
+                {
+                    var anio = DateTime.Today.Year;
+                    var sedeIdBoleta = await _db.ExecuteScalarAsync<int>(
+                        "SELECT sede_id FROM dbo.boletas WHERE id = @BoletaId",
+                        new { dto.BoletaId });
+
+                    // Secuencia basada en ordenes_compra (tabla propia)
+                    var siguienteNum = await _db.ExecuteScalarAsync<int>(@"
+                        SELECT ISNULL(MAX(CAST(RIGHT(folio, 4) AS INT)), 0) + 1
+                        FROM dbo.ordenes_compra
+                        WHERE YEAR(fecha) = @anio
+                          AND sede_id    = @sedeId",
+                        new { anio, sedeId = sedeIdBoleta });
+
+                    var folioOc = $"OC-{anio}-{siguienteNum:D4}";
+
+                    // Insertar en tabla propia de OC — productor_id y sede_id vienen directo de preliquidaciones
+                    await _db.ExecuteAsync(@"
+                        INSERT INTO dbo.ordenes_compra
+                            (folio, sede_id, preliquidacion_id, productor_id, fecha)
+                        SELECT @folio, sede_id, id, productor_id, CAST(created_at AS DATE)
+                        FROM dbo.preliquidaciones
+                        WHERE id = @preliqId",
+                        new { folio = folioOc, preliqId = nuevoPreliqId });
+
+                    // Mantener folio_oc en preliquidaciones para compatibilidad
+                    await _db.ExecuteAsync(
+                        "UPDATE dbo.preliquidaciones SET folio_oc = @folioOc WHERE id = @id",
+                        new { folioOc, id = nuevoPreliqId });
+                }
 
                 // 2. Actualizar peso_neto_kg y tara_kg en bascula_recepciones
                 var sqlBascula = @"

@@ -11,20 +11,42 @@ namespace Alazan.API.Controllers
         private readonly IDbConnection _db;
         public VolcadoController(IDbConnection db) => _db = db;
 
-        // GET: api/volcado?sedeId=1
+        // GET: api/volcado?sedeId=1&fecha=2026-05-07
+        // Si no se pasa fecha, muestra solo el día de hoy.
         [HttpGet]
-        public async Task<IActionResult> GetRegistrosVolcado([FromQuery] int sedeId)
+        public async Task<IActionResult> GetRegistrosVolcado(
+            [FromQuery] int     sedeId     = 0,
+            [FromQuery] string? fecha      = null,
+            [FromQuery] string? fechaDesde = null,
+            [FromQuery] string? fechaHasta = null)
         {
             try
             {
-                var sql = @"
+                DateTime? diaFiltro = null;
+                DateTime? desde     = null;
+                DateTime? hasta     = null;
+
+                if (!string.IsNullOrWhiteSpace(fecha) && DateTime.TryParse(fecha, out var fd))
+                    diaFiltro = fd.Date;
+                else if (!string.IsNullOrWhiteSpace(fechaDesde) || !string.IsNullOrWhiteSpace(fechaHasta))
+                {
+                    if (DateTime.TryParse(fechaDesde, out var fd2)) desde = fd2.Date;
+                    if (DateTime.TryParse(fechaHasta, out var fh2)) hasta = fh2.Date.AddDays(1).AddTicks(-1);
+                }
+
+                var fechaWhere = diaFiltro.HasValue
+                    ? "AND CAST(b.created_at AS DATE) = @diaFiltro"
+                    : (desde.HasValue || hasta.HasValue
+                        ? "AND (@desde IS NULL OR b.created_at >= @desde) AND (@hasta IS NULL OR b.created_at <= @hasta)"
+                        : "");
+
+                var sql = $@"
                     SELECT
                         ROW_NUMBER() OVER (ORDER BY b.created_at DESC) AS numero,
                         b.id AS boletaId,
                         b.ticket_numero AS ticket,
                         b.folio AS noBoleta,
                         FORMAT(b.fecha_hora, 'yyyy-MM-dd HH:mm') AS fecha,
-                        --CAST(b.peso_neto / 1000.0 AS DECIMAL(10,3)) AS tonsAprox,
                         bp.tons_aprox as tonsAprox,
                         br.chofer,
                         br.placas,
@@ -44,9 +66,10 @@ namespace Alazan.API.Controllers
                     LEFT JOIN dbo.granos_catalogo g ON br.grano_id = g.id
                     LEFT JOIN dbo.volcado_bodega v ON b.bascula_id = v.bascula_id
                     LEFT JOIN dbo.boletas_precio bp ON b.id = bp.id
-                    WHERE b.sede_id = @sedeId
-                    AND b.status IN ('Precio Aceptado', 'Volcado Completado', 'Pre-liquidado','En Renegociacion','Rechazado')";
-                var registros = await _db.QueryAsync<dynamic>(sql, new { sedeId });
+                    WHERE (@sedeId = 0 OR b.sede_id = @sedeId)
+                    AND b.status IN ('Precio Aceptado', 'Volcado Completado', 'Pre-liquidado','En Renegociacion','Rechazado')
+                    {fechaWhere}";
+                var registros = await _db.QueryAsync<dynamic>(sql, new { sedeId, diaFiltro = diaFiltro?.Date, desde, hasta });
                 return Ok(registros);
             }
             catch (Exception ex)

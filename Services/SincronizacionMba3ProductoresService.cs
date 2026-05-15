@@ -10,7 +10,7 @@ namespace Alazan.API.Services
     public class SincronizacionMba3ProductoresService : BackgroundService
     {
         private const string MBA3_BASE = "http://201.148.25.52:8443";
-        private const string MBA3_CODIGO = "API100";
+        private const string MBA3_CODIGO = "CON100";
         private const string MBA3_PWD = "zaqxsw97531";
 
         private readonly IServiceScopeFactory _scopeFactory;
@@ -31,6 +31,9 @@ namespace Alazan.API.Services
         {
             _logger.LogInformation("Servicio de sincronización MBA3 → productores iniciado");
 
+            // Retraso inicial: esperar 5 minutos para no competir con peticiones de usuarios al arrancar
+            await Task.Delay(TimeSpan.FromMinutes(5), stoppingToken);
+
             while (!stoppingToken.IsCancellationRequested)
             {
                 try
@@ -42,7 +45,7 @@ namespace Alazan.API.Services
                     _logger.LogError(ex, "Error en sincronización MBA3 → productores");
                 }
 
-                await Task.Delay(TimeSpan.FromMinutes(60), stoppingToken);
+                await Task.Delay(TimeSpan.FromMinutes(1440), stoppingToken);
             }
         }
 
@@ -57,7 +60,7 @@ namespace Alazan.API.Services
 
             var formContent = new FormUrlEncodedContent(new Dictionary<string, string>
             {
-                ["select"] = "VENDOR_NAME,RUC_or_FED_ID,ACCOUNT_MNGR,TELEPHONE_MAIN,TELEPHONE_PM,ACCT_CODE,ADDRESS_1,ADDRESS_2,CITY,STATE,ZIP,COUNTRY,NAME_RAZON_SOCIAL,FACSIMILE,E_MAIL",
+                ["select"] = "VENDOR_ID,VENDOR_NAME,RUC_or_FED_ID,ACCOUNT_MNGR,TELEPHONE_MAIN,TELEPHONE_PM,ADDRESS_1,ADDRESS_2,CITY,STATE,ZIP,COUNTRY,NAME_RAZON_SOCIAL,FACSIMILE,E_MAIL",
                 ["from"]   = "PROV_Ficha_Principal",
                 ["where"]  = $"CORP='BGAR1' AND RECORD_DATE > '{fecha3}'",
                 ["limit"]  = "9999",
@@ -87,24 +90,26 @@ namespace Alazan.API.Services
 
             await db.ExecuteAsync(@"
                 CREATE TABLE #tmp_mba3 (
-                    nombre          NVARCHAR(300) NULL,
-                    rfc             NVARCHAR(20)  NULL,
-                    telefono        NVARCHAR(50)  NULL,
-                    telefono2       NVARCHAR(50)  NULL,
-                    correo          NVARCHAR(200) NULL,
-                    fax             NVARCHAR(50)  NULL,
-                    codigo_proveedor NVARCHAR(50) NULL,
-                    atiende         NVARCHAR(200) NULL,
-                    direccion1      NVARCHAR(500) NULL,
-                    direccion2      NVARCHAR(500) NULL,
-                    ciudad          NVARCHAR(100) NULL,
-                    estado          NVARCHAR(100) NULL,
-                    codigo_postal   NVARCHAR(10)  NULL,
-                    pais            NVARCHAR(10)  NULL,
-                    nombre_alterno  NVARCHAR(300) NULL
+                    vendor_id        NVARCHAR(20)  NULL,
+                    nombre           NVARCHAR(300) NULL,
+                    rfc              NVARCHAR(20)  NULL,
+                    telefono         NVARCHAR(50)  NULL,
+                    telefono2        NVARCHAR(50)  NULL,
+                    correo           NVARCHAR(200) NULL,
+                    fax              NVARCHAR(50)  NULL,
+                    codigo_proveedor NVARCHAR(50)  NULL,
+                    atiende          NVARCHAR(200) NULL,
+                    direccion1       NVARCHAR(500) NULL,
+                    direccion2       NVARCHAR(500) NULL,
+                    ciudad           NVARCHAR(100) NULL,
+                    estado           NVARCHAR(100) NULL,
+                    codigo_postal    NVARCHAR(10)  NULL,
+                    pais             NVARCHAR(100) NULL,
+                    nombre_alterno   NVARCHAR(300) NULL
                 )");
 
             var dt = new DataTable();
+            dt.Columns.Add("vendor_id");
             dt.Columns.Add("nombre");
             dt.Columns.Add("rfc");
             dt.Columns.Add("telefono");
@@ -123,15 +128,17 @@ namespace Alazan.API.Services
 
             foreach (var item in items)
             {
-                var rfc = Str(item, "RUC_or_FED_ID")?.Replace(" ", "") ?? "";
+                var rfc      = Str(item, "RUC_or_FED_ID")?.Replace(" ", "") ?? "";
+                var vendorId = Str(item, "VENDOR_ID");
                 dt.Rows.Add(
+                    string.IsNullOrEmpty(vendorId) ? (object)DBNull.Value : vendorId,
                     Str(item, "VENDOR_NAME"),
                     string.IsNullOrEmpty(rfc) ? (object)DBNull.Value : rfc,
                     Str(item, "TELEPHONE_MAIN")?.Replace(" ", ""),
                     Str(item, "TELEPHONE_PM")?.Replace(" ", ""),
                     Str(item, "E_MAIL"),
                     Str(item, "FACSIMILE"),
-                    Str(item, "ACCT_CODE"),
+                    string.IsNullOrEmpty(vendorId) ? (object)DBNull.Value : vendorId.TrimStart('0'),
                     Str(item, "ACCOUNT_MNGR"),
                     Str(item, "ADDRESS_1"),
                     Str(item, "ADDRESS_2"),
@@ -149,7 +156,7 @@ namespace Alazan.API.Services
                 await bulk.WriteToServerAsync(dt);
             }
 
-            var result = await db.QueryFirstAsync<dynamic>(@"
+            var result = await db.QueryFirstAsync<dynamic>(new CommandDefinition(@"
                 DECLARE @output TABLE (accion NVARCHAR(10));
 
                 MERGE dbo.productores AS t
@@ -163,7 +170,8 @@ namespace Alazan.API.Services
                 WHEN MATCHED THEN UPDATE SET
                     nombre=s.nombre, telefono=s.telefono, correo=s.correo,
                     telefono2=s.telefono2, fax=s.fax,
-                    codigo_proveedor=s.codigo_proveedor, atiende=s.atiende,
+                    codigo_proveedor=s.codigo_proveedor, numero_erp=s.vendor_id,
+                    atiende=s.atiende,
                     direccion1=s.direccion1, direccion2=s.direccion2,
                     ciudad=s.ciudad, estado=s.estado,
                     codigo_postal=s.codigo_postal, pais=s.pais,
@@ -171,12 +179,12 @@ namespace Alazan.API.Services
                     origen='mba', updated_at=GETDATE()
                 WHEN NOT MATCHED BY TARGET THEN INSERT (
                     nombre, rfc, telefono, correo, telefono2, fax,
-                    codigo_proveedor, atiende, direccion1, direccion2,
+                    codigo_proveedor, numero_erp, atiende, direccion1, direccion2,
                     ciudad, estado, codigo_postal, pais, nombre_alterno,
                     origen, activo, created_at, updated_at
                 ) VALUES (
                     s.nombre, s.rfc, s.telefono, s.correo, s.telefono2, s.fax,
-                    s.codigo_proveedor, s.atiende, s.direccion1, s.direccion2,
+                    s.codigo_proveedor, s.vendor_id, s.atiende, s.direccion1, s.direccion2,
                     s.ciudad, s.estado, s.codigo_postal, s.pais, s.nombre_alterno,
                     'mba', 1, GETDATE(), GETDATE()
                 )
@@ -185,7 +193,7 @@ namespace Alazan.API.Services
                 SELECT
                     SUM(CASE WHEN accion = 'INSERT' THEN 1 ELSE 0 END) AS insertados,
                     SUM(CASE WHEN accion = 'UPDATE' THEN 1 ELSE 0 END) AS actualizados
-                FROM @output;");
+                FROM @output;", commandTimeout: 120));
 
             _logger.LogInformation(
                 "Sincronización MBA3 completada. Insertados: {Insertados}, Actualizados: {Actualizados}",
